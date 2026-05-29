@@ -1,4 +1,4 @@
-name: Auto Update Sub
+name: Auto Update Sub (Real Delay)
 
 on:
   schedule:
@@ -6,10 +6,7 @@ on:
   workflow_dispatch: 
 
 permissions:
-  contents: write # Даем права на запись
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
+  contents: write
 
 jobs:
   update:
@@ -18,25 +15,48 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+      - name: Download Raw Configs
+        run: |
+          wget -qO raw.txt "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+          
+          # 2. Очищаем от мусора: оставляем только те строки, где есть '://' (настоящие конфиги)
+          grep '://' raw.txt > configs.txt
+          echo "Найдено серверов для проверки:"
+          wc -l configs.txt
 
-      - name: Install Dependencies
-        run: pip install requests
+      - name: Setup Xray-Knife
+        run: |
+          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | grep browser_download_url | grep -i linux | grep -i amd64 | grep -i zip | cut -d '"' -f 4 | head -n 1)
+          wget -qO xray-knife.zip "$URL"
+          unzip -q -j xray-knife.zip -d xray_bin
+          
+          mv xray_bin/*xray-knife* ./xray-knife || mv xray_bin/* ./xray-knife
+          chmod +x ./xray-knife
 
-      - name: Run Checker Script
-        run: python checker.py
+      - name: Run Real Delay Test
+        run: |
+      
+          ./xray-knife http -f configs.txt -t 50 -o valid.txt
+          
+          echo "Рабочих серверов найдено:"
+          wc -l valid.txt
+          
+          
+          head -n 25 valid.txt > best.txt
+          
+          
+          cat best.txt | base64 -w 0 > sub.txt
 
-      - name: Commit and Push Changes
+      - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          if [ -f sub.txt ]; then
+          
+          if [ -s sub.txt ]; then
             git add sub.txt
-            git commit -m "Автообновление подписки" || echo "Изменений нет"
+            git commit -m "Успешный Real Delay тест: подписка обновлена" || echo "Изменений нет"
             git push
           else
-            echo "Файл sub.txt не создан (нет рабочих серверов или ошибка скачивания). Пушить нечего."
+            echo "Нет ни одного рабочего сервера."
+            exit 1
           fi
