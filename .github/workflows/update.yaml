@@ -15,10 +15,22 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download Raw Configs
+      - name: Download Configs from Multiple Sources
         run: |
-          wget -qO raw.txt "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
-          grep -iE 'vless://|vmess://|trojan://|ss://' raw.txt > configs.txt
+          # Создаем пустой файл для сбора всех конфигов
+          touch all_raw.txt
+          
+          echo "Скачиваю источник 1..."
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> all_raw.txt
+          
+          echo "Скачиваю источник 2..."
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> all_raw.txt
+          
+          echo "Скачиваю источник 3..."
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt" >> all_raw.txt
+          grep -iE 'vless://|vmess://|trojan://|ss://|hysteria2://' all_raw.txt | sort | uniq > configs.txt
+          
+          echo "Всего уникальных серверов собрано: $(wc -l < configs.txt)"
 
       - name: Setup Xray-Knife
         run: |
