@@ -41,7 +41,7 @@ jobs:
       - name: Run Real Delay Test
         run: |
           echo "Запускаем Real Delay проверку..."
-          ./xray-knife net http -f configs.txt -t 50 -o valid.txt
+          ./xray-knife test http --file configs.txt --thread 50 --output valid.txt
           
           if [ ! -s valid.txt ]; then
             echo "Ни один сервер не прошел проверку на реальный интернет."
