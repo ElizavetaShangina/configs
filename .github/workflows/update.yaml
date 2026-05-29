@@ -2,7 +2,7 @@ name: Auto Update Sub (Real Delay)
 
 on:
   schedule:
-    - cron: '0 */4 * * *' 
+    - cron: '0 */1 * * *' 
   workflow_dispatch: 
 
 permissions:
@@ -19,46 +19,39 @@ jobs:
         run: |
           wget -qO raw.txt "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
           grep -iE 'vless://|vmess://|trojan://|ss://' raw.txt > configs.txt
-          echo "Найдено потенциальных серверов: $(wc -l < configs.txt)"
 
       - name: Setup Xray-Knife
         run: |
-          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name | contains("linux-64.zip")) | .browser_download_url' | head -n 1)
-          
-          if [ -z "$URL" ] || [ "$URL" == "null" ]; then
-            echo "ОШИБКА: Ссылка не найдена. Проверяю альтернативное имя..."
-            URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name | contains("linux")) | .browser_download_url' | head -n 1)
-          fi
-          
-          echo "Скачиваем xray-knife по ссылке: $URL"
+          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name == "Xray-knife-linux-64.zip") | .browser_download_url')
           wget -qO xray-knife.zip "$URL"
-        
           unzip -o xray-knife.zip -d temp_xray
-          find temp_xray -type f -name "*xray-knife*" -exec mv {} ./xray-knife \;
+          mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
-          echo "Xray-knife успешно установлен."  
 
-      - name: Run Real Delay Test
+      - name: Run Strict Real Delay Test
         run: |
-          echo "Запускаем тест через команду subs parse..."
-          ./xray-knife http --file configs.txt --thread 50 --out valid.txt
+          echo "Запускаем тест (Real Delay)..."
+          ./xray-knife http --file configs.txt --thread 30 --mdelay 2000 --url "http://www.google.com/generate_204" --out valid.txt
           
           if [ ! -s valid.txt ]; then
-            echo "Ни один сервер не прошел проверку на реальный интернет."
-            exit 0
+            echo "Ни один сервер не прошелтест. Пробуем упростить задачу..."
+            ./xray-knife http --file configs.txt --thread 30 --mdelay 2500 --out valid.txt
           fi
           
-          echo "Рабочих найдено: $(wc -l < valid.txt)"
-          head -n 25 valid.txt > best.txt
-          cat best.txt | base64 -w 0 > sub.txt
+          if [ -s valid.txt ]; then
+            head -n 25 valid.txt > best.txt
+            cat best.txt | base64 -w 0 > sub.txt
+          else
+            echo "Рабочие сервера не найдены."
+            exit 0
+          fi
 
       - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
           if [ -f sub.txt ]; then
             git add sub.txt
-            git commit -m "Real Delay Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git commit -m "Strict Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
             git push
           fi
