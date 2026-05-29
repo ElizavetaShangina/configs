@@ -41,7 +41,7 @@ jobs:
       - name: Run Real Delay Test
         run: |
           echo "Запускаем тест через команду subs parse..."
-          ./xray-knife http --file configs.txt --thread 50 --output valid.txt
+          ./xray-knife http --file configs.txt --thread 50 --out valid.txt
           
           if [ ! -s valid.txt ]; then
             echo "Ни один сервер не прошел проверку на реальный интернет."
