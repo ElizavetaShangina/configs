@@ -3,10 +3,13 @@ name: Auto Update Sub
 on:
   schedule:
     - cron: '0 */4 * * *' 
-  workflow_dispatch:
+  workflow_dispatch: 
 
 permissions:
-  contents: write 
+  contents: write # Даем права на запись
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true 
 
 jobs:
   update:
@@ -30,7 +33,10 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add sub.txt
-          # Команда ниже не выдаст ошибку, если конфиги не изменились
-          git commit -m "Автообновление подписки" || echo "Изменений нет"
-          git push
+          if [ -f sub.txt ]; then
+            git add sub.txt
+            git commit -m "Автообновление подписки" || echo "Изменений нет"
+            git push
+          else
+            echo "Файл sub.txt не создан (нет рабочих серверов или ошибка скачивания). Пушить нечего."
+          fi
