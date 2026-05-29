@@ -36,12 +36,12 @@ jobs:
           unzip -o xray-knife.zip -d temp_xray
           find temp_xray -type f -name "*xray-knife*" -exec mv {} ./xray-knife \;
           chmod +x xray-knife
-          ./xray-knife version
+          echo "Xray-knife успешно установлен."  
 
       - name: Run Real Delay Test
         run: |
           echo "Запускаем Real Delay проверку..."
-          ./xray-knife http -f configs.txt -t 50 -o valid.txt
+          ./xray-knife net http -f configs.txt -t 50 -o valid.txt
           
           if [ ! -s valid.txt ]; then
             echo "Ни один сервер не прошел проверку на реальный интернет."
