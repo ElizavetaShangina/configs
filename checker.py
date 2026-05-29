@@ -6,7 +6,7 @@ import time
 from urllib.parse import urlparse
 
 
-SOURCE_URL = "https://github.com/igareck/vpn-configs-for-russia/blob/main/Vless-Reality-White-Lists-Rus-Mobile.txt" 
+SOURCE_URL = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" 
 TIMEOUT = 2.0
 TOP_N = 25
 
