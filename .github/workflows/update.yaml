@@ -37,15 +37,11 @@ jobs:
           find temp_xray -type f -name "*xray-knife*" -exec mv {} ./xray-knife \;
           chmod +x xray-knife
           echo "Xray-knife успешно установлен."  
-          echo "=== Краткая справка по командам ==="
-          ./xray-knife --help || true
-          echo "=== Справка по работе с подписками ==="
-          ./xray-knife subs --help || true
 
       - name: Run Real Delay Test
         run: |
           echo "Запускаем тест через команду subs parse..."
-          ./xray-knife subs parse --file configs.txt --http --thread 50 --output valid.txt
+          ./xray-knife http --file configs.txt --thread 50 --output valid.txt
           
           if [ ! -s valid.txt ]; then
             echo "Ни один сервер не прошел проверку на реальный интернет."
