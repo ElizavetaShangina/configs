@@ -18,36 +18,37 @@ jobs:
       - name: Download Raw Configs
         run: |
           wget -qO raw.txt "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
-          grep -E 'vless://|vmess://|trojan://|ss://' raw.txt > configs.txt
-          echo "Найдено серверов для проверки: $(wc -l < configs.txt)"
+          grep -iE 'vless://|vmess://|trojan://|ss://' raw.txt > configs.txt
+          echo "Найдено потенциальных серверов: $(wc -l < configs.txt)"
 
       - name: Setup Xray-Knife
         run: |
-          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name | contains("linux-amd64.zip")) | .browser_download_url')
+          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name | contains("linux-64.zip")) | .browser_download_url' | head -n 1)
           
           if [ -z "$URL" ] || [ "$URL" == "null" ]; then
-            echo "Ошибка: Не удалось найти ссылку на xray-knife в API GitHub"
-            exit 1
+            echo "ОШИБКА: Ссылка не найдена. Проверяю альтернативное имя..."
+            URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name | contains("linux")) | .browser_download_url' | head -n 1)
           fi
           
-          echo "Скачиваем: $URL"
+          echo "Скачиваем xray-knife по ссылке: $URL"
           wget -qO xray-knife.zip "$URL"
-          unzip -o xray-knife.zip
-          chmod +x xray-knife*
-          find . -name "xray-knife*" -type f -not -name "*.zip" -exec mv {} ./xray-knife \;
-
+        
+          unzip -o xray-knife.zip -d temp_xray
+          find temp_xray -type f -name "*xray-knife*" -exec mv {} ./xray-knife \;
+          chmod +x xray-knife
           ./xray-knife version
 
       - name: Run Real Delay Test
         run: |
-          ./xray-knife http -f configs.txt -t 20 -o valid.txt
+          echo "Запускаем Real Delay проверку..."
+          ./xray-knife http -f configs.txt -t 50 -o valid.txt
           
-          if [ ! -f valid.txt ] || [ ! -s valid.txt ]; then
-            echo "Ни один сервер не прошел Real Delay тест."
+          if [ ! -s valid.txt ]; then
+            echo "Ни один сервер не прошел проверку на реальный интернет."
             exit 0
           fi
           
-          echo "Рабочих серверов: $(wc -l < valid.txt)"
+          echo "Рабочих найдено: $(wc -l < valid.txt)"
           head -n 25 valid.txt > best.txt
           cat best.txt | base64 -w 0 > sub.txt
 
