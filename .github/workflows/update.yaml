@@ -1,8 +1,8 @@
-name: Auto Update Sub (Real Delay)
+name: Auto Update Sub (Multi-Source + Manual)
 
 on:
   schedule:
-    - cron: '0 */1 * * *' 
+    - cron: '0 */4 * * *' 
   workflow_dispatch: 
 
 permissions:
@@ -15,22 +15,23 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download Configs from Multiple Sources
+      - name: Download Public Configs
         run: |
-          # Создаем пустой файл для сбора всех конфигов
-          touch all_raw.txt
+          # Собираем публичные ссылки из ваших новых источников
+          touch public_raw.txt
           
-          echo "Скачиваю источник 1..."
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> all_raw.txt
+          echo "Скачиваю источник 1 (White-Lists-Rus-Mobile)..."
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> public_raw.txt
           
-          echo "Скачиваю источник 2..."
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> all_raw.txt
+          echo "Скачиваю источник 2 (WHITE-CIDR-RU-all)..."
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
           
-          echo "Скачиваю источник 3..."
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt" >> all_raw.txt
-          grep -iE 'vless://|vmess://|trojan://|ss://|hysteria2://' all_raw.txt | sort | uniq > configs.txt
+          echo "Скачиваю источник 3 (BLACK_SS+All_RUS)..."
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt" >> public_raw.txt
           
-          echo "Всего уникальных серверов собрано: $(wc -l < configs.txt)"
+          # Очистка: теперь включая hysteria2://
+          grep -iE 'vless://|vmess://|trojan://|ss://|hysteria2://' public_raw.txt | sort | uniq > configs_to_test.txt
+          echo "Публичных серверов для теста: $(wc -l < configs_to_test.txt)"
 
       - name: Setup Xray-Knife
         run: |
@@ -40,23 +41,33 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Run Strict Real Delay Test
+      - name: Run Test and Merge with Manual
         run: |
           echo "Запускаем тест (Real Delay)..."
-          ./xray-knife http --file configs.txt --thread 30 --mdelay 2000 --url "http://www.google.com/generate_204" --out valid.txt
+          # Проверка на реальный интернет (mdelay 1500 для качества)
+          ./xray-knife http --file configs_to_test.txt --thread 50 --mdelay 1500 --url "http://www.google.com/generate_204" --out valid_public.txt || touch valid_public.txt
           
-          if [ ! -s valid.txt ]; then
-            echo "Ни один сервер не прошелтест. Пробуем упростить задачу..."
-            ./xray-knife http --file configs.txt --thread 30 --mdelay 2500 --out valid.txt
+          # Берем Топ-20 проверенных
+          head -n 20 valid_public.txt > best_public.txt
+          
+          # Формируем финальный список (Сэндвич)
+          touch final_list.txt
+          
+          # 1. Сначала ваши ручные (без фильтров)
+          if [ -s manual_configs.txt ]; then
+            echo "Добавляю ручные конфиги..."
+            cat manual_configs.txt >> final_list.txt
+            echo "" >> final_list.txt
           fi
           
-          if [ -s valid.txt ]; then
-            head -n 25 valid.txt > best.txt
-            cat best.txt | base64 -w 0 > sub.txt
-          else
-            echo "Рабочие сервера не найдены."
-            exit 0
-          fi
+          # 2. Потом проверенные публичные
+          cat best_public.txt >> final_list.txt
+          
+          # Чистим пустые строки и пакуем в base64
+          sed -i '/^$/d' final_list.txt
+          cat final_list.txt | base64 -w 0 > sub.txt
+          
+          echo "Готово! Ручных: $(wc -l < manual_configs.txt 2>/dev/null || echo 0), публичных отобранных: $(wc -l < best_public.txt)"
 
       - name: Commit and Push
         run: |
@@ -64,6 +75,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -f sub.txt ]; then
             git add sub.txt
-            git commit -m "Strict Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git commit -m "Update sub (Igareck sources + Manual): $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
             git push
           fi
