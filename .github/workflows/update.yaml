@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  TARGET_SITE: "https://aistudio.google.com/prompts/new_chat"
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -18,14 +21,17 @@ jobs:
       - name: Download Configs from 6 Sources
         run: |
           touch public_raw.txt
-        
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS_BAll_RUS.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt" >> public_raw.txt
-          grep -iE 'vless://|vmess://|trojan://|ss://|hysteria2://' public_raw.txt | sort | uniq > configs_to_test.txt
+
+          grep -iE 'hysteria2://|hy2://|tuic://|vless://' public_raw.txt > step1.txt
+          grep -viE 'vk.ru|cloud-vk|sbrf|max.ru|x5.ru|yandex|mail.ru|wb.ru|ozon|tinkoff|alfabank' step1.txt > step2.txt
+          grep -iE 'hysteria2://|hy2://|tuic://|security=reality|security=tls' step2.txt | sort | uniq > configs_to_test.txt
+      
 
       - name: Setup Xray-Knife
         run: |
@@ -35,27 +41,21 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Run Multi-Check (Super Strict + Speed Filter)
+      - name: Run Test on Resistant Configs
         run: |
-          ./xray-knife http --file configs_to_test.txt \
-                            --url "http://www.google.com/generate_204" \
-                            --mdelay 1200 \
-                            --thread 50 \
-                            --out valid_pass1.txt || touch valid_pass1.txt
+          echo "Тестируем только устойчивые к ТСПУ серверы..."
           
-          if [ -s valid_pass1.txt ]; then
-            ./xray-knife http --file valid_pass1.txt \
-                              --url "https://aistudio.google.com/prompts/new_chat" \
-                              --mdelay 1500 \
-                              --thread 20 \
-                              --out valid_final.txt || touch valid_final.txt
-          fi
+          ./xray-knife http --file configs_to_test.txt \
+                            --url "${{ env.TARGET_SITE }}" \
+                            --mdelay 2500 \
+                            --thread 50 \
+                            --out valid_target.txt || touch valid_target.txt
 
-          if [ -s valid_final.txt ]; then
-            head -n 10 valid_final.txt > best.txt
+          if [ -s valid_target.txt ]; then
+            head -n 10 valid_target.txt > best.txt
             cat best.txt | base64 -w 0 > sub.txt
           else
-            head -n 10 valid_pass1.txt > best.txt 2>/dev/null || echo "" > best.txt
+            grep -iE 'hysteria2://|hy2://' configs_to_test.txt | head -n 5 > best.txt || touch best.txt
             cat best.txt | base64 -w 0 > sub.txt
           fi
 
@@ -65,6 +65,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -f sub.txt ]; then
             git add sub.txt
-            git commit -m "Update Mode 6-Sources Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git commit -m "Grandma Guaranteed Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
             git push
           fi
