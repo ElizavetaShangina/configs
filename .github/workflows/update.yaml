@@ -21,11 +21,10 @@ jobs:
         
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt" >> public_raw.txt # delete if have other ideas
-
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK%20VLESS%20RUS.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK%20VLESS%20RUS%20mobile.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt" >> public_raw.txt
           grep -iE 'vless://|vmess://|trojan://|ss://|hysteria2://' public_raw.txt | sort | uniq > configs_to_test.txt
 
       - name: Setup Xray-Knife
