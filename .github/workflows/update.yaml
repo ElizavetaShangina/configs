@@ -1,4 +1,4 @@
-name: Auto Update Sub (Grandma Mode 6-Sources)
+name: Auto Update Sub
 
 on:
   schedule:
