@@ -1,4 +1,4 @@
-name: Auto Update Sub (Ultra Strict)
+name: Auto Update Sub (Grandma Mode 6-Sources)
 
 on:
   schedule:
@@ -8,11 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  TARGET_SITE: "https://aistudio.google.com/prompts/new_chat" 
-  # Максимальная задержка в мс (800 - очень строго, 1200 - средне)
-  MAX_DELAY: "1000"
-
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -20,16 +15,18 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Download Public Configs
+      - name: Download Configs from 6 Sources
         run: |
           touch public_raw.txt
+        
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2BAll_RUS.txt" >> public_raw.txt
-          
-          
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt" >> public_raw.txt # delete if have other ideas
+
           grep -iE 'vless://|vmess://|trojan://|ss://|hysteria2://' public_raw.txt | sort | uniq > configs_to_test.txt
-          echo "Всего в базе для теста: $(wc -l < configs_to_test.txt)"
 
       - name: Setup Xray-Knife
         run: |
@@ -39,36 +36,28 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Run Ultra Strict Test
+      - name: Run Multi-Check (Super Strict + Speed Filter)
         run: |
-          echo "Запускаем проверку на доступность сайта: ${{ env.TARGET_SITE }}"
-          
-          # http : команда теста
-          # --url : именно твой целевой сайт
-          # --mdelay : жесткий лимит задержки
-          # --thread 50 : скорость теста
-          # --out : файл вывода
           ./xray-knife http --file configs_to_test.txt \
-                            --url "${{ env.TARGET_SITE }}" \
-                            --mdelay ${{ env.MAX_DELAY }} \
+                            --url "http://www.google.com/generate_204" \
+                            --mdelay 1200 \
                             --thread 50 \
-                            --out valid.txt
+                            --out valid_pass1.txt || touch valid_pass1.txt
           
-          if [ ! -s valid.txt ]; then
-            echo "Ни один сервер не смог открыть ${{ env.TARGET_SITE }} с задержкой < ${{ env.MAX_DELAY }}ms"
-            # Попытка №2: чуть менее строго, если все упали
-            ./xray-knife http --file configs_to_test.txt --url "${{ env.TARGET_SITE }}" --mdelay 2000 --thread 50 --out valid.txt
+          if [ -s valid_pass1.txt ]; then
+            ./xray-knife http --file valid_pass1.txt \
+                              --url "https://aistudio.google.com/prompts/new_chat" \
+                              --mdelay 1500 \
+                              --thread 20 \
+                              --out valid_final.txt || touch valid_final.txt
           fi
-          
-          if [ -s valid.txt ]; then
-            echo "Рабочих серверов: $(wc -l < valid.txt)"
-            # Берем только топ-10 самых надежных
-            head -n 10 valid.txt > best.txt
+
+          if [ -s valid_final.txt ]; then
+            head -n 10 valid_final.txt > best.txt
             cat best.txt | base64 -w 0 > sub.txt
           else
-            echo "Даже при мягких настройках ничего не найдено."
-            # Создаем пустой файл sub.txt, чтобы гит не падал
-            echo "" | base64 > sub.txt
+            head -n 10 valid_pass1.txt > best.txt 2>/dev/null || echo "" > best.txt
+            cat best.txt | base64 -w 0 > sub.txt
           fi
 
       - name: Commit and Push
@@ -77,6 +66,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -f sub.txt ]; then
             git add sub.txt
-            git commit -m "Ultra Strict Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git commit -m "Update Mode 6-Sources Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
             git push
           fi
