@@ -23,10 +23,8 @@ jobs:
           touch public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_SS%2All_RUS.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-SNI-RU-all.txt" >> public_raw.txt
 
           grep -iE 'hysteria2://|hy2://|tuic://|vless://' public_raw.txt > step1.txt
           grep -viE 'vk.ru|cloud-vk|sbrf|max.ru|x5.ru|yandex|mail.ru|wb.ru|ozon|tinkoff|alfabank' step1.txt > step2.txt
