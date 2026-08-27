@@ -41,7 +41,7 @@ jobs:
       - name: Setup Xray-Knife
         run: |
           # ИСПРАВЛЕНО: Возвращен правильный адрес GitHub API
-          URL=$(curl -s https://github.com | jq -r '.assets[] | select(.name == "Xray-knife-linux-64.zip") | .browser_download_url')
+          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name == "Xray-knife-linux-64.zip") | .browser_download_url')
           wget -qO xray-knife.zip "$URL"
           unzip -o xray-knife.zip -d temp_xray
           mv temp_xray/xray-knife ./xray-knife
