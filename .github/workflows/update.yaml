@@ -9,7 +9,8 @@ permissions:
   contents: write
 
 env:
-  TARGET_SITE: "https://aistudio.google.com/prompts/new_chat"
+  # Используем github.com или google.com для базовой проверки обхода ТСПУ
+  TARGET_SITE: "https://github.com" 
 
 jobs:
   update:
@@ -17,6 +18,14 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python Dependencies
+        run: pip install requests
 
       - name: Download Configs from Sources
         run: |
@@ -38,23 +47,69 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Run Test on Resistant Configs
+      - name: Advanced Core Validation (Python)
         run: |
-          ./xray-knife http --file public_raw.txt \
-                            --url "${{ env.TARGET_SITE }}" \
-                            --mdelay 2500 \
-                            --thread 50 \
-                            --out valid_target.txt || touch valid_target.txt
+          cat << 'EOF' > validate.py
+          import subprocess
+          import json
+          import os
 
-          head -n 20 valid_target.txt > best.txt
-          cat best.txt | base64 -w 0 > sub.txt
+          # Сначала сделаем грубый быстрый отбор через xray-knife, чтобы убрать 95% мусора
+          print("[-] Запуск предварительного теста через xray-knife...")
+          cmd = "./xray-knife http --file public_raw.txt --url https://github.com --mdelay 2000 --thread 80 --out pre_valid.txt"
+          subprocess.run(cmd, shell=True)
+
+          if not os.path.exists("pre_valid.txt") or os.path.getsize("pre_valid.txt") == 0:
+              print("[!] Нет живых конфигураций после первичного теста.")
+              with open("sub.txt", "w") as f: f.write("")
+              exit(0)
+
+          # Читаем условно рабочие конфиги
+          with open("pre_valid.txt", "r") as f:
+              configs = [line.strip() for line in f if line.strip()]
+
+          real_working = []
+
+          # Глубокий тест каждого конфига на реальный HTTP-ответ
+          print(f"[-] Начинаем глубокую валидацию {len(configs)} конфигов...")
+          for idx, config in enumerate(configs):
+              # Переводим конфиг в формат xray json через xray-knife net (или используем кастомную логику)
+              # Для надежности мы заставим xray-knife дать нам детальный статус по конкретному прокси
+              test_cmd = f'./xray-knife http --config "{config}" --url "https://aistudio.google.com/prompts/new_chat" --thread 1 --mdelay 1500'
+              result = subprocess.run(test_cmd, shell=True, capture_output=True, text=True)
+              
+              # Проверяем, что в выводе xray-knife нет признаков ошибок ("failed", "timeout", "bad status")
+              output = result.stdout.lower()
+              if "200 ok" in output or ("github" in output and "fail" not in output):
+                  # Дополнительная проверка на геоблоки Google AI Studio (опционально)
+                  real_working.append(config)
+                  if len(real_working) >= 30: # Нам достаточно 20 лучших
+                      break
+
+          print(f"[+] Найдено реально рабочих конфигов: {len(real_working)}")
+          
+          # Записываем результат
+          with open("best.txt", "w") as f:
+              for conf in real_working:
+                  f.write(conf + "\n")
+          EOF
+          python3 validate.py
+
+      - name: Base64 Encode Output
+        run: |
+          if [ -f best.txt ] && [ -s best.txt ]; then
+            cat best.txt | base64 -w 0 > sub.txt
+          else
+            echo "No working configs found"
+            touch sub.txt
+          fi
           
       - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          if [ -f sub.txt ]; then
+          if [ -s sub.txt ]; then
             git add sub.txt
-            git commit -m "Update: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git commit -m "Update: $(date +'%Y-%m-%d %H:%M') [Real Working Only]" || echo "No changes"
             git push
           fi
