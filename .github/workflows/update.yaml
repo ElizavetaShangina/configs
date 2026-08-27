@@ -29,11 +29,6 @@ jobs:
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt" >> public_raw.txt
-          
-          grep -iE 'hysteria2://|hy2://|tuic://|vless://' public_raw.txt > step1.txt
-          grep -viE 'vk.ru|cloud-vk|sbrf|max.ru|x5.ru|yandex|mail.ru|wb.ru|ozon|tinkoff|alfabank' step1.txt > step2.txt
-          grep -iE 'hysteria2://|hy2://|tuic://|security=reality|security=tls' step2.txt | sort | uniq > configs_to_test.txt
-      
 
       - name: Setup Xray-Knife
         run: |
@@ -45,20 +40,15 @@ jobs:
 
       - name: Run Test on Resistant Configs
         run: |
-          ./xray-knife http --file configs_to_test.txt \
+          ./xray-knife http --file public_raw.txt \
                             --url "${{ env.TARGET_SITE }}" \
                             --mdelay 2500 \
                             --thread 50 \
                             --out valid_target.txt || touch valid_target.txt
 
-          if [ -s valid_target.txt ]; then
-            head -n 10 valid_target.txt > best.txt
-            cat best.txt | base64 -w 0 > sub.txt
-          else
-            grep -iE 'hysteria2://|hy2://' configs_to_test.txt | head -n 5 > best.txt || touch best.txt
-            cat best.txt | base64 -w 0 > sub.txt
-          fi
-
+          head -n 20 valid_target.txt > best.txt
+          cat best.txt | base64 -w 0 > sub.txt
+          
       - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
