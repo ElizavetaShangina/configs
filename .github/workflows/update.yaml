@@ -21,10 +21,10 @@ jobs:
       - name: Download Configs from Sources
         run: |
           touch public_raw.txt
-          wget -q0- "https://raw.githubusercontent.com/barry-far/V2ray-config/main/All_Configs_Sub.txt" >> public_raw.txt
-          wget -q0- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt" >> public_raw.txt
-          wget -q0- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt" >> public_raw.txt
-          wget -q0- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/25.txt" >> public_raw.txt
+          wget -qO- "https://raw.githubusercontent.com/barry-far/V2ray-config/main/All_Configs_Sub.txt" >> public_raw.txt
+          wget -qO- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt" >> public_raw.txt
+          wget -qO- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt" >> public_raw.txt
+          wget -qO- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/25.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
           wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt" >> public_raw.txt
