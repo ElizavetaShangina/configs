@@ -50,7 +50,7 @@ jobs:
       - name: Ultra Fast Double-Pass Validation
         run: |
           # Шаг 1: Лавинный экспресс-тест (Таймаут 1.2 сек, 400 потоков). Пролетает 17000 конфигов примерно за 45-60 секунд.
-          print("[-] Запуск лавинного отсева 17k конфигов...")
+          echo "[-] Запуск лавинного отсева 17k конфигов...")
           ./xray-knife http --file public_raw.txt --url https://github.com --mdelay 1200 --thread 400 --out fast_passed.txt || touch fast_passed.txt
 
           if [ ! -s fast_passed.txt ]; then
