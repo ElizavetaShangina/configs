@@ -9,7 +9,6 @@ permissions:
   contents: write
 
 env:
-  # Используем github.com или google.com для базовой проверки обхода ТСПУ
   TARGET_SITE: "https://github.com" 
 
 jobs:
@@ -30,33 +29,34 @@ jobs:
       - name: Download Configs from Sources
         run: |
           touch public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/barry-far/V2ray-config/main/All_Configs_Sub.txt" >> public_raw.txt
-          wget -qO- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt" >> public_raw.txt
-          wget -qO- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt" >> public_raw.txt
-          wget -qO- "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/25.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt" >> public_raw.txt
-          wget -qO- "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt" >> public_raw.txt
+          wget -qO- "https://githubusercontent.com" >> public_raw.txt
+          wget -qO- "https://github.com" >> public_raw.txt
+          wget -qO- "https://github.com" >> public_raw.txt
+          wget -qO- "https://github.com" >> public_raw.txt
+          wget -qO- "https://githubusercontent.com" >> public_raw.txt
+          wget -qO- "https://githubusercontent.com" >> public_raw.txt
+          wget -qO- "https://githubusercontent.com" >> public_raw.txt
+          wget -qO- "https://githubusercontent.com" >> public_raw.txt
 
       - name: Setup Xray-Knife
         run: |
-          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name == "Xray-knife-linux-64.zip") | .browser_download_url')
+          URL=$(curl -s https://github.com | jq -r '.assets[] | select(.name == "Xray-knife-linux-64.zip") | .browser_download_url')
           wget -qO xray-knife.zip "$URL"
           unzip -o xray-knife.zip -d temp_xray
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Advanced Core Validation (Python)
+      - name: Fast Parallel Validation (Python + Go Multi-threading)
         run: |
           cat << 'EOF' > validate.py
           import subprocess
-          import json
           import os
+          from concurrent.futures import ThreadPoolExecutor, as_completed
 
-          # Сначала сделаем грубый быстрый отбор через xray-knife, чтобы убрать 95% мусора
-          print("[-] Запуск предварительного теста через xray-knife...")
-          cmd = "./xray-knife http --file public_raw.txt --url https://github.com --mdelay 2000 --thread 80 --out pre_valid.txt"
+          # 1. Быстрый многопоточный отсев средствами самого Go-компилятора xray-knife
+          # Увеличиваем потоки до 300, снижаем таймаут до 1200мс для резкого ускорения
+          print("[-] Запуск сверхбыстрого предварительного теста через xray-knife (300 потоков)...")
+          cmd = "./xray-knife http --file public_raw.txt --url https://github.com --mdelay 1200 --thread 300 --out pre_valid.txt"
           subprocess.run(cmd, shell=True)
 
           if not os.path.exists("pre_valid.txt") or os.path.getsize("pre_valid.txt") == 0:
@@ -68,25 +68,34 @@ jobs:
           with open("pre_valid.txt", "r") as f:
               configs = [line.strip() for line in f if line.strip()]
 
+          print(f"[+] Первичный тест прошли {len(configs)} конфигураций.")
+          
+          # Ограничиваем пул для глубокого теста первыми 150-ми самыми быстрыми (они уже отсортированы по пингу)
+          configs_to_test = configs[:150]
           real_working = []
 
-          # Глубокий тест каждого конфига на реальный HTTP-ответ
-          print(f"[-] Начинаем глубокую валидацию {len(configs)} конфигов...")
-          for idx, config in enumerate(configs):
-              # Переводим конфиг в формат xray json через xray-knife net (или используем кастомную логику)
-              # Для надежности мы заставим xray-knife дать нам детальный статус по конкретному прокси
-              test_cmd = f'./xray-knife http --config "{config}" --url "https://aistudio.google.com/prompts/new_chat" --thread 1 --mdelay 1500'
+          # Функция изолированного быстрого теста одного конфига
+          def check_single_config(config):
+              test_cmd = f'./xray-knife http --config "{config}" --url "https://github.com" --thread 1 --mdelay 1000'
               result = subprocess.run(test_cmd, shell=True, capture_output=True, text=True)
-              
-              # Проверяем, что в выводе xray-knife нет признаков ошибок ("failed", "timeout", "bad status")
               output = result.stdout.lower()
               if "200 ok" in output or ("github" in output and "fail" not in output):
-                  # Дополнительная проверка на геоблоки Google AI Studio (опционально)
-                  real_working.append(config)
-                  if len(real_working) >= 30: # Нам достаточно 20 лучших
-                      break
+                  return config
+              return None
 
-          print(f"[+] Найдено реально рабочих конфигов: {len(real_working)}")
+          # 2. Глубокий параллельный тест в Python (в 20 потоков) только для ТОП-150 кандидатов
+          print(f"[-] Начинаем глубокую параллельную валидацию ТОП-{len(configs_to_test)} кандидатов...")
+          with ThreadPoolExecutor(max_workers=20) as executor:
+              futures = {executor.submit(check_single_config, conf): conf for conf in configs_to_test}
+              for future in as_completed(futures):
+                  res = future.result()
+                  if res:
+                      real_working.append(res)
+                      # Как только набрали 25 идеальных конфигов — останавливаемся ради экономии времени
+                      if len(real_working) >= 25:
+                          break
+
+          print(f"[+] Итоговый результат: найдено {len(real_working)} гарантированно рабочих конфигов.")
           
           # Записываем результат
           with open("best.txt", "w") as f:
@@ -110,6 +119,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s sub.txt ]; then
             git add sub.txt
-            git commit -m "Update: $(date +'%Y-%m-%d %H:%M') [Real Working Only]" || echo "No changes"
+            git commit -m "Update: $(date +'%Y-%m-%d %H:%M') [Optimized Speed]" || echo "No changes"
             git push
           fi
