@@ -94,7 +94,7 @@ jobs:
               is_valid = False
               try:
                   # Делаем РЕАЛЬНЫЙ запрос к GitHub с жестким таймаутом в 3.5 секунды
-                  response = requests.get("https://github.com", proxies=proxies, headers=headers, timeout=3.5)
+                  response = requests.get("https://aistudio.google.com/prompts/new_chat", proxies=proxies, headers=headers, timeout=3.5)
                   
                   # Критически важная проверка контента, чтобы исключить ложные срабатывания ТСПУ
                   if response.status_code == 200 and "github" in response.text.lower():
