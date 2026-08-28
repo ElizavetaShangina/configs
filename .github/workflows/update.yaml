@@ -31,29 +31,32 @@ jobs:
           mv xray_bin/xray ./xray
           chmod +x xray
 
-      - name: Fetch, Filter (DPI-Bypass) and Randomize Nodes
+      - name: Fetch 10 Top Sources and Filter
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > get_and_filter.py
+          cat << 'EOF' > get_candidates.py
           import base64
           import random
           import re
           import requests
           from urllib.parse import urlparse, parse_qs
 
-          # Динамические агрегаторы, собирающие свежие узлы из сотен Telegram-каналов
           SOURCES = [
               "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality",
-              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
+              "https://raw.githubusercontent.com/VOID-Anonymity/V.O.I.D-VPN_Bypass/refs/heads/main/url_work.txt",
               "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt"
+              "https://raw.githubusercontent.com/w1770946466/Auto_proxy/main/Long_term_subscription_num",
+              "https://raw.githubusercontent.com/Lexiie/all_proxy/main/file/vless.txt",
+              "https://raw.githubusercontent.com/BoringCat/free-node/main/v2ray.txt",
+              "https://raw.githubusercontent.com/tbbatbb/Proxy/master/main/vless",
+              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt"
           ]
 
-          # Строгие регулярки для проверки SNI (домен должен быть похож на настоящий)
-          DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-          # Исключаем SNI, за которые в РФ часто прилетает блок или шейп
-          BAD_SNI = {"google.com", "cloudflare.com", "speedtest.net", "workers.dev"}
+          # Мусорные SNI, которые глушат провайдеры
+          BAD_SNIS = {"google.com", "speedtest.net", "cloudflare.com", "workers.dev"}
 
           def decode_if_base64(text):
               try:
@@ -64,74 +67,64 @@ jobs:
                   pass
               return text
 
-          def is_survival_config(link):
-              if not link.lower().startswith("vless://"):
-                  return False
-              if "security=reality" not in link.lower():
-                  return False
-
-              try:
-                  p = urlparse(link)
-                  params = parse_qs(p.query)
-                  
-                  # 1. ТСПУ часто режет нестандартные порты. Разрешаем только 443
-                  if p.port != 443:
-                      return False
-
-                  # 2. Проверка SNI на реалистичность
-                  sni = params.get("sni", [""])[0].lower()
-                  if not sni or not DOMAIN_REGEX.match(sni):
-                      return False
-                  if any(bad in sni for bad in BAD_SNI):
-                      return False
-
-                  # 3. Отсекаем Иранские и подозрительные китайские домены
-                  host = p.hostname.lower() if p.hostname else ""
-                  if host.endswith(".ir") or host.endswith(".cn"):
-                      return False
-
-                  # 4. Протокол должен быть только TCP (xtls-rprx-vision) или gRPC
-                  net = params.get("type", ["tcp"])[0]
-                  if net not in ["tcp", "grpc"]:
-                      return False
-
-                  return True
-              except Exception:
-                  return False
-
           collected = set()
+
           for url in SOURCES:
               try:
-                  print(f"[*] Скачивание свежих дампов: {url}", flush=True)
-                  resp = requests.get(url, timeout=15)
+                  resp = requests.get(url, timeout=12)
                   if resp.status_code == 200:
                       text = decode_if_base64(resp.text)
                       matches = re.findall(r'(vless://[^\s\'"<>]+)', text, re.IGNORECASE)
                       for m in matches:
-                          m = m.strip()
-                          if is_survival_config(m):
+                          # ОТРЕЗАЕМ ХЭШТЕГИ ПЕРЕД ПАРСИНГОМ (здесь была ошибка в прошлый раз)
+                          clean_link = m.split("#")[0].strip()
+                          
+                          if "security=reality" not in clean_link.lower():
+                              continue
+                              
+                          try:
+                              p = urlparse(clean_link)
+                              host = p.hostname.lower() if p.hostname else ""
+                              
+                              # Отсекаем Иран и Китай (самые проблемные хосты)
+                              if host.endswith(".ir") or host.endswith(".cn"):
+                                  continue
+                                  
+                              params = parse_qs(p.query)
+                              # Проверка наличия ключа
+                              if not params.get("pbk"):
+                                  continue
+                                  
+                              # Проверка SNI
+                              sni = params.get("sni", [""])[0].lower()
+                              if any(bad in sni for bad in BAD_SNIS):
+                                  continue
+
+                              # Сохраняем оригинальную ссылку с хэштегом
                               collected.add(m)
+                          except Exception:
+                              pass
               except Exception as e:
                   print(f"[!] Ошибка {url}: {e}")
 
           unique_list = list(collected)
-          print(f"\n[*] Собрано и отфильтровано для РФ: {len(unique_list)} узлов.", flush=True)
+          print(f"[*] Собрано чистых кандидатов VLESS Reality: {len(unique_list)}")
 
-          # САМОЕ ГЛАВНОЕ: Рандомизация! Чтобы каждый запуск давал новые узлы.
+          # Рандомизация для разнообразия узлов
           random.shuffle(unique_list)
 
-          # Оставляем 500 случайных кандидатов для тестирования
-          with open("nodes_to_test.txt", "w", encoding="utf-8") as f:
-              for c in unique_list[:500]:
+          # Берем 800 штук для тестов
+          with open("candidates.txt", "w", encoding="utf-8") as f:
+              for c in unique_list[:800]:
                   f.write(c + "\n")
           EOF
-          python3 get_and_filter.py
+          python3 get_candidates.py
 
-      - name: True End-to-End Test (AI Studio + Telegram)
+      - name: True End-to-End Stress Test (TG + AI Studio)
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > deep_test.py
+          cat << 'EOF' > validate.py
           import base64
           import concurrent.futures
           import json
@@ -150,14 +143,15 @@ jobs:
           TARGET_GOAL = 15
           CONCURRENCY = 15
 
-          def build_xray_config(link, socks_port):
+          def generate_xray_config(link, socks_port):
               try:
-                  p = urlparse(link)
+                  clean_link = link.split("#")[0].strip()
+                  p = urlparse(clean_link)
                   params = parse_qs(p.query)
                   
-                  user_obj = {"id": p.username, "encryption": "none"}
+                  user = {"id": p.username, "encryption": "none"}
                   flow = params.get("flow", [""])[0]
-                  if flow: user_obj["flow"] = flow
+                  if flow: user["flow"] = flow
 
                   stream = {
                       "network": params.get("type", ["tcp"])[0],
@@ -177,49 +171,47 @@ jobs:
                   return {
                       "log": {"loglevel": "none"},
                       "inbounds": [{"listen": "127.0.0.1", "port": socks_port, "protocol": "socks", "settings": {"auth": "noauth", "udp": True}}],
-                      "outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": p.hostname, "port": int(p.port), "users": [user_obj]}]}, "streamSettings": stream}]
+                      "outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": p.hostname, "port": int(p.port), "users": [user]}]}, "streamSettings": stream}]
                   }
               except Exception:
                   return None
 
-          def check_node(item):
-              idx, link, worker_id = item
+          def worker(item):
+              idx, link, w_id = item
               if stop_event.is_set(): return
 
-              port = 30000 + worker_id
-              cfg = build_xray_config(link, port)
+              port = 30000 + w_id
+              cfg = generate_xray_config(link, port)
               if not cfg: return
 
-              cfg_path = f"cfg_{worker_id}.json"
-              with open(cfg_path, "w") as f: json.dump(cfg, f)
+              cfg_file = f"x_{w_id}.json"
+              with open(cfg_file, "w") as f: json.dump(cfg, f)
 
               proc = None
               try:
-                  proc = subprocess.Popen(["./xray", "run", "-c", cfg_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  time.sleep(0.5)
+                  proc = subprocess.Popen(["./xray", "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  time.sleep(0.6) # Даем ядру запуститься
                   
                   proxies = {"http": f"socks5h://127.0.0.1:{port}", "https": f"socks5h://127.0.0.1:{port}"}
                   headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36"}
 
-                  # 1. Быстрый тест на наличие реального интернета (отсеиваем мертвые за 1 сек)
-                  fast_test = requests.get("https://1.1.1.1", proxies=proxies, timeout=3.0)
-                  if fast_test.status_code != 200: return
+                  # 1. ТЕСТ TELEGRAM (Если не открывается - прокси мертв для мессенджеров)
+                  if requests.get("https://api.telegram.org", proxies=proxies, timeout=3.5).status_code not in [200, 302, 404]:
+                      return
 
-                  # 2. Тест Telegram
-                  tg = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.0)
-                  if tg.status_code not in [200, 404, 302]: return
-
-                  # 3. Тест AI Studio
+                  # 2. ТЕСТ AI STUDIO (Проверка пробива геоблока)
+                  t0 = time.time()
                   ai = requests.get("https://aistudio.google.com/prompts/new_chat", proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
-                  body, url = ai.text.lower(), ai.url.lower()
+                  latency = int((time.time() - t0) * 1000)
 
-                  # Проверка геоблока
-                  if ai.status_code in [200, 302] and "available_regions" not in url and "not available in your country" not in body:
+                  # Если AI Studio возвращает редирект на "недоступный регион" - бракуем
+                  if "available_regions" not in ai.url.lower() and "not available in your country" not in ai.text.lower():
                       with lock:
-                          if len(working_nodes) < TARGET_GOAL:
-                              working_nodes.append(link)
-                              print(f"[🔥] [{len(working_nodes):02d}/{TARGET_GOAL:02d}] НАЙДЕН ТОПОВЫЙ УЗЕЛ! -> {urlparse(link).hostname}", flush=True)
-                              if len(working_nodes) >= TARGET_GOAL:
+                          if len(working) < TARGET_GOAL:
+                              working.append(link)
+                              name = link.split("#")[-1] if "#" in link else urlparse(link.split("#")[0]).hostname
+                              print(f"[🔥] [{len(working):02d}/{TARGET_GOAL:02d}] РАБОТАЕТ! Пинг: {latency}ms | Узел: {name}", flush=True)
+                              if len(working) >= TARGET_GOAL:
                                   stop_event.set()
               except Exception:
                   pass
@@ -228,39 +220,19 @@ jobs:
                       try: proc.kill()
                       except: pass
 
-          working_nodes = []
+          working = []
           lock = threading.Lock()
           stop_event = threading.Event()
 
-          with open("nodes_to_test.txt", "r") as f:
+          with open("candidates.txt", "r") as f:
               candidates = [line.strip() for line in f if line.strip()]
 
           print("=" * 70)
-          print(f"[*] СТАРТ ЖЕСТКОГО ТЕСТИРОВАНИЯ: {len(candidates)} случайных кандидатов...")
+          print(f"[*] СТАРТ СКВОЗНОГО ТЕСТИРОВАНИЯ: {len(candidates)} узлов...")
           print("=" * 70, flush=True)
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-              for _ in executor.map(check_node, [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]):
+              for _ in executor.map(worker, [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]):
                   if stop_event.is_set(): break
 
-          print("\n[+] Тестирование завершено! Сохраняем результат...")
-          with open("clean_configs.txt", "w") as f:
-              for c in working_nodes: f.write(c + "\n")
-
-          if working_nodes:
-              with open("sub.txt", "w") as f:
-                  f.write(base64.b64encode(("\n".join(working_nodes) + "\n").encode()).decode())
-          else:
-              open("sub.txt", "w").close()
-          EOF
-          python3 -u deep_test.py
-
-      - name: Commit and Push
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          if [ -s clean_configs.txt ]; then
-            git add sub.txt clean_configs.txt
-            git commit -m "Ultra-Filtered Random Configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
-            git push
-          fi
+          print(f"
