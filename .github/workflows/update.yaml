@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -33,29 +35,41 @@ jobs:
           chmod +x xray-knife
           ./xray-knife version || true
 
-      - name: Pull Verified Shards & Sanitize
+      - name: Fetch 16 Mega-Sources & Extract Candidates
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > get_verified.py
+          cat << 'EOF' > fetch_all.py
           import base64
           import random
           import re
           import requests
-          from urllib.parse import urlparse, parse_qs
+          from urllib.parse import urlparse
 
-          # Только предварительно верифицированные потоки (Verified / Top100)
-          VERIFIED_SOURCES = [
+          # 16 крупнейших агрегаторов, обновляющихся каждые 5-30 минут
+          SOURCES = [
+              # Верифицированные потоки с реальным трафиком
               "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
               "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs_base64.txt",
               "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt",
               "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/vless.txt",
               "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/all_configs.txt",
-              "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/all.txt"
+              "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/all.txt",
+              # SoliSpirit & Barry-Far
+              "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/all_configs.txt",
+              "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/vless.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub6.txt",
+              # Epodonios, Yebekhe, Mahdibland, MatinGhanbari
+              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/raw/main/All_Configs_Sub.txt",
+              "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality",
+              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt",
+              "https://raw.githubusercontent.com/MustafaBaqer/VestraNet-Nodes/main/protocols/vless.txt",
+              "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/all_sub.txt"
           ]
 
           PROTO_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
-          BLOCKED_TLDS = (".ir", ".cn", ".ru", ".by")
 
           def decode_if_base64(text):
               try:
@@ -66,25 +80,12 @@ jobs:
                   pass
               return text
 
-          def is_clean_node(link):
-              try:
-                  clean = link.split("#")[0].strip()
-                  p = urlparse(clean)
-                  if not p.hostname or not p.port:
-                      return False
-                  host = p.hostname.lower()
-                  if any(host.endswith(tld) for tld in BLOCKED_TLDS):
-                      return False
-                  return True
-              except Exception:
-                  return False
-
           collected = set()
-          print("=" * 70, flush=True)
-          print("[*] СКАЧИВАНИЕ ПРЕДВАРИТЕЛЬНО ВЕРИФИЦИРОВАННЫХ ПОТОКОВ", flush=True)
-          print("=" * 70, flush=True)
+          print("=" * 75, flush=True)
+          print("[*] СКАЧИВАНИЕ ИЗ 16 ГЛОБАЛЬНЫХ ИСТОЧНИКОВ", flush=True)
+          print("=" * 75, flush=True)
 
-          for url in VERIFIED_SOURCES:
+          for url in SOURCES:
               try:
                   resp = requests.get(url, timeout=12)
                   if resp.status_code == 200:
@@ -93,51 +94,50 @@ jobs:
                       count = 0
                       for m in matches:
                           m = m.strip()
-                          if is_clean_node(m):
-                              clean_base = m.split("#")[0].strip()
-                              if clean_base not in collected:
-                                  collected.add(m)
-                                  count += 1
+                          clean_base = m.split("#")[0].strip()
+                          if clean_base not in collected:
+                              collected.add(m)
+                              count += 1
                       source_name = "/".join(url.split("/")[-3:])
-                      print(f"[+] {source_name}: получено {count} проверенных узлов", flush=True)
+                      print(f"[+] {source_name}: извлечено {count} шт.", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
 
           unique_list = list(collected)
-          print(f"\n[*] Итого уникальных предварительно проверенных узлов: {len(unique_list)}", flush=True)
+          print(f"\n[*] Всего уникальных узлов для проверки: {len(unique_list)}", flush=True)
 
-          # Перемешиваем
+          # Перемешиваем кандидатов
           random.shuffle(unique_list)
 
-          # Берем 300 лучших для финального теста
+          # Берем большой срез до 1000 кандидатов на тест
           with open("candidates.txt", "w", encoding="utf-8") as f:
-              for c in unique_list[:300]:
+              for c in unique_list[:1000]:
                   f.write(c + "\n")
           EOF
-          python3 get_verified.py
+          python3 fetch_all.py
 
-      - name: Final Google & Payload Live Test
+      - name: Test ALL Candidates (NO LIMITS)
         run: |
           if [ -s candidates.txt ]; then
             echo "================================================================================"
-            echo "[*] Финальное тестирование нативного трафика Google (цель: 20 лучших серверов)..."
+            echo "[*] Запуск нативного тестирования всего пула без ограничений на количество..."
             echo "================================================================================"
             
-            # Проверяем сквозную доставку данных
+            # Проверяем все узлы без флага --max-passed (сохраняем ВСЁ что работает)
             ./xray-knife http -f candidates.txt \
-              -t 25 \
+              -t 35 \
               --timeout 3000 \
               --test-urls "https://www.google.com/generate_204" \
-              --max-passed 20 \
               -o passed_raw.txt || true
           fi
 
-      - name: Build Clean Subscriptions
+      - name: Format ALL Working Subscriptions
         run: |
           cat << 'EOF' > make_sub.py
           import base64
           import os
           import re
+          import datetime
 
           PROTO_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
 
@@ -155,40 +155,42 @@ jobs:
                               seen_hosts.add(clean_base)
                               cleaned.append(m)
 
-          final_configs = cleaned[:20]
+          now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-          print("\n" + "=" * 70)
-          print(f"[ИТОГ] Сформировано {len(final_configs)} гарантированно рабочих серверов!")
-          print("=" * 70)
+          print("\n" + "=" * 75)
+          print(f"[ИТОГ] Найдено и сохранено РАБОЧИХ серверов (БЕЗ ОГРАНИЧЕНИЙ): {len(cleaned)}")
+          print(f"[ИТОГ] Время обновления: {now_str}")
+          print("=" * 75)
 
+          # Записываем все рабочие узлы
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              for c in final_configs:
+              for c in cleaned:
                   f.write(c + "\n")
 
-          if final_configs:
-              b64_sub = base64.b64encode(("\n".join(final_configs) + "\n").encode('utf-8')).decode('utf-8')
+          # Сохраняем Base64 подписку
+          if cleaned:
+              b64_sub = base64.b64encode(("\n".join(cleaned) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_sub)
-              print("[+] sub.txt и clean_configs.txt успешно записаны.")
+              print("[+] sub.txt и clean_configs.txt успешно сгенерированы.")
           else:
               open("sub.txt", "w").close()
-              print("[!] Рабочие узлы не обнаружены.")
+              print("[!] Внимание: Рабочие узлы не обнаружены.")
           EOF
           python3 make_sub.py
 
-      - name: Commit and Push
+      - name: Commit and Push (Guaranteed Sync)
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          if [ -s clean_configs.txt ]; then
-            git add sub.txt clean_configs.txt
-            git commit -m "Update verified working proxies [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
-            git push
-          fi
+          git pull --rebase || true
+          git add sub.txt clean_configs.txt
+          git commit -m "Auto-Update: $(date -u +'%Y-%m-%d %H:%M:%S UTC') [All Live Nodes]" || echo "No changes to commit"
+          git push
 
       - name: Purge jsDelivr CDN Cache
         run: |
-          echo "[*] Сброс кэша CDN..."
+          echo "[*] Сброс кэша CDN jsDelivr..."
           curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/sub.txt" || true
           curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/clean_configs.txt" || true
-          echo "[+] Кэш успешно сброшен."
+          echo "[+] Запрос на сброс кэша отправлен."
