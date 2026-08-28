@@ -126,50 +126,51 @@ jobs:
           import threading
           import time
           import requests
+          import urllib3
+
+          # Отключаем предупреждения SSL
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
           AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
           MAX_TARGET = 20
           CONCURRENCY = 8
-          TIMEOUT = 8.0
+          TIMEOUT = 7.0
 
-          # Страны, где Google AI Studio гарантированно заблокирован
           BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "CU", "KP", "SY", "VE"}
           ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
           URI_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
 
           def load_candidates():
               configs = []
-              # Собираем после первого этапа
               for fname in ["prescan_alive.txt", "raw_candidates.txt"]:
                   if os.path.exists(fname):
                       with open(fname, "r", encoding="utf-8", errors="ignore") as f:
                           for line in f:
-                              m = URI_REGEX.findall(line)
-                              for c in m:
+                              matches = URI_REGEX.findall(line)
+                              for c in matches:
                                   c = c.strip()
                                   if c.startswith(ALLOWED_SCHEMES) and c not in configs:
                                       configs.append(c)
               return configs
 
-          def wait_for_port(port, timeout=3.0):
+          def wait_for_port(port, timeout=2.5):
               start = time.time()
               while time.time() - start < timeout:
                   try:
-                      with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                      with socket.create_connection(("127.0.0.1", port), timeout=0.15):
                           return True
                   except (socket.timeout, ConnectionRefusedError, OSError):
                       time.sleep(0.05)
               return False
 
           def start_proxy(config, port):
-              # Запуск инстанса прокси через xray-knife
               for cmd in [
                   ["./xray-knife", "proxy", "inbound", "-c", config, "--port", str(port)],
                   ["./xray-knife", "proxy", "-c", config, "--port", str(port)]
               ]:
                   try:
                       proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                      if wait_for_port(port, timeout=2.0):
+                      if wait_for_port(port, timeout=1.8):
                           return proc
                       proc.terminate()
                       proc.wait()
@@ -177,91 +178,156 @@ jobs:
                       pass
               return None
 
+          def format_time(seconds):
+              m, s = divmod(int(seconds), 60)
+              return f"{m:02d}:{s:02d}"
+
+          # Глобальные переменные отслеживания прогресса
           working_configs = []
+          processed_count = 0
+          total_candidates = 0
+          start_time = 0
           lock = threading.Lock()
           stop_event = threading.Event()
 
+          def get_progress_prefix():
+              elapsed = time.time() - start_time
+              speed = processed_count / elapsed if elapsed > 0 else 0
+              remaining_items = max(0, total_candidates - processed_count)
+              eta_seconds = (remaining_items / speed) if speed > 0 else 0
+              
+              return (
+                  f"[{processed_count:03d}/{total_candidates:03d} | "
+                  f"Найдено: {len(working_configs):02d}/{MAX_TARGET:02d} | "
+                  f"Прошло: {format_time(elapsed)} | "
+                  f"ETA: {format_time(eta_seconds)}]"
+              )
+
           def verify_config(item):
+              global processed_count
               idx, config, worker_id = item
+              
               if stop_event.is_set():
                   return
 
               port = 25000 + worker_id
               proc = start_proxy(config, port)
+
+              status_msg = ""
+              is_success = False
+
               if not proc:
-                  return
+                  status_msg = "[-] Не удалось запустить локальный сокс / битый конфиг"
+              else:
+                  proxies = {
+                      'http': f'socks5h://127.0.0.1:{port}',
+                      'https': f'socks5h://127.0.0.1:{port}'
+                  }
+                  headers = {
+                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                      'Accept-Language': 'en-US,en;q=0.9'
+                  }
 
-              proxies = {
-                  'http': f'socks5h://127.0.0.1:{port}',
-                  'https': f'socks5h://127.0.0.1:{port}'
-              }
-              headers = {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                  'Accept-Language': 'en-US,en;q=0.9'
-              }
-
-              passed = False
-              country_code = "UNKNOWN"
-
-              try:
-                  # 1. Проверка GeoIP (отсекаем РФ и санкционные регионы)
                   try:
-                      geo_resp = requests.get("https://api.country.is", proxies=proxies, timeout=5.0)
-                      if geo_resp.status_code == 200:
-                          country_code = geo_resp.json().get("country", "").upper()
-                          if country_code in BLOCKED_COUNTRIES:
-                              return
-                  except Exception:
-                      pass
+                      # 1. Проверка страны
+                      country = "UNKNOWN"
+                      try:
+                          geo = requests.get("https://api.country.is", proxies=proxies, timeout=3.5)
+                          if geo.status_code == 200:
+                              country = geo.json().get("country", "UNKNOWN").upper()
+                      except Exception:
+                          pass
 
-                  # 2. Строгий запрос к Google AI Studio
-                  resp = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=TIMEOUT, allow_redirects=True)
-                  final_url = resp.url.lower()
-                  body = resp.text.lower()
+                      if country in BLOCKED_COUNTRIES:
+                          status_msg = f"[-] Отклонен: Геоблок по IP ({country})"
+                      else:
+                          # 2. Проверка Google AI Studio
+                          req_start = time.time()
+                          resp = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=TIMEOUT, allow_redirects=True)
+                          latency = int((time.time() - req_start) * 1000)
 
-                  # Проверяем, что нет редиректа на страницу блокировки регионов
-                  if resp.status_code in [200, 302]:
-                      is_geoblocked = (
-                          "available_regions" in final_url or
-                          "available-regions" in final_url or
-                          "not available in your country" in body or
-                          "region is not supported" in body or
-                          "restricted" in body and "google ai studio" in body
-                      )
-                      if not is_geoblocked:
-                          # 3. Дополнительная проверка API бэкенда Gemini
-                          api_check = requests.get("https://generativelanguage.googleapis.com", proxies=proxies, timeout=4.0)
-                          if api_check.status_code in [200, 404]: # 404 без параметров - нормальный ответ этого эндпоинта
-                              passed = True
-              except Exception:
-                  pass
-              finally:
-                  proc.terminate()
-                  try:
-                      proc.wait(timeout=1.0)
-                  except Exception:
-                      proc.kill()
+                          final_url = resp.url.lower()
+                          body = resp.text.lower()
 
-              if passed:
-                  with lock:
+                          if resp.status_code in [200, 302]:
+                              is_geoblocked = (
+                                  "available_regions" in final_url or
+                                  "available-regions" in final_url or
+                                  "not available in your country" in body or
+                                  "region is not supported" in body or
+                                  ("restricted" in body and "google ai studio" in body)
+                              )
+                              if is_geoblocked:
+                                  status_msg = f"[-] Отклонен: AI Studio вернул редирект/заглушку региона (Страна: {country})"
+                              else:
+                                  # 3. Gemini API чек
+                                  api_chk = requests.get("https://generativelanguage.googleapis.com", proxies=proxies, timeout=3.5)
+                                  if api_chk.status_code in [200, 404]:
+                                      is_success = True
+                                      status_msg = f"[+] РАБОТАЕТ ДЛЯ AI STUDIO! (Страна: {country}, Задержка: {latency}ms)"
+                                  else:
+                                      status_msg = f"[-] Отклонен: Gemini API недоступен (Код: {api_chk.status_code})"
+                          else:
+                              status_msg = f"[-] Отклонен: Код ответа AI Studio {resp.status_code}"
+                  except requests.exceptions.Timeout:
+                      status_msg = "[-] Отклонен: Таймаут соединения"
+                  except Exception as e:
+                      status_msg = f"[-] Отклонен: Ошибка сети ({type(e).__name__})"
+                  finally:
+                      proc.terminate()
+                      try:
+                          proc.wait(timeout=0.8)
+                      except Exception:
+                          proc.kill()
+
+              with lock:
+                  processed_count += 1
+                  prefix = get_progress_prefix()
+                  
+                  if is_success:
                       if len(working_configs) < MAX_TARGET:
                           working_configs.append(config)
-                          print(f"[+] [{len(working_configs)}/{MAX_TARGET}] НАЙДЕН РАБОЧИЙ AI STUDIO КОНФИГ! (Страна: {country_code})", flush=True)
+                          print(f"\n{prefix} 🌟 {status_msg}", flush=True)
                           if len(working_configs) >= MAX_TARGET:
+                              print(f"\n[🎯] Целевой лимит в {MAX_TARGET} конфигураций достигнут! Прерываем сканирование...", flush=True)
                               stop_event.set()
+                  else:
+                      # Выводим подробный статус каждые несколько проверок или при успехе
+                      print(f"{prefix} {status_msg}", flush=True)
 
           def main():
+              global total_candidates, start_time
               candidates = load_candidates()
-              print(f"[*] Кандидатов на глубокую проверку: {len(candidates)}", flush=True)
+              total_candidates = len(candidates)
+              start_time = time.time()
+
+              print("=" * 80)
+              print(f"[*] Старт глубокой валидации Google AI Studio")
+              print(f"[*] Всего кандидатов: {total_candidates} | Цель: {MAX_TARGET} рабочих узлов | Потоков: {CONCURRENCY}")
+              print("=" * 80, flush=True)
+
+              if not candidates:
+                  print("[!] Список кандидатов пуст.")
+                  return
+
               tasks = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]
 
               with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
                   futures = [executor.submit(verify_config, t) for t in tasks]
                   for f in concurrent.futures.as_completed(futures):
                       if stop_event.is_set():
+                          # Отменяем еще не начатые задачи
+                          for pending in futures:
+                              pending.cancel()
                           break
 
-              print(f"\n[#] Валидация завершена! Найдено 100% рабочих для AI Studio: {len(working_configs)}")
+              total_elapsed = time.time() - start_time
+              print("\n" + "=" * 80)
+              print(f"[ИТОГ] Валидация завершена за {format_time(total_elapsed)}!")
+              print(f"[ИТОГ] Проверено кандидатов: {processed_count}/{total_candidates}")
+              print(f"[ИТОГ] Гарантированно рабочих для AI Studio: {len(working_configs)}/{MAX_TARGET}")
+              print("=" * 80, flush=True)
+
               with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
                   for c in working_configs:
                       f.write(c + "\n")
@@ -277,6 +343,7 @@ jobs:
               main()
           EOF
           python3 deep_check.py
+          
 
       - name: Commit and Push
         run: |
