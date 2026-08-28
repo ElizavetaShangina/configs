@@ -27,19 +27,18 @@ jobs:
 
       - name: Install Official Xray-Core
         run: |
-          echo "[*] Загрузка официального ядра Xray-core..."
+          echo "[*] Загрузка Xray-core..."
           wget -qO xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
           unzip -o xray.zip -d xray_bin
           mv xray_bin/xray ./xray
           chmod +x xray
-          echo "[+] Xray установлен:"
           ./xray version
 
-      - name: Harvest, Deep-Validate & Build Subscriptions
+      - name: Fetch, Validate & Build Subscriptions
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > full_pipeline.py
+          cat << 'EOF' > run_validator.py
           import base64
           import concurrent.futures
           import datetime
@@ -62,92 +61,61 @@ jobs:
           AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
           CONCURRENCY = 4
 
+          # Источники от Игорька (igareck) и Барри (barry-far)
           SOURCES = [
-              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
-              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs_base64.txt",
-              "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/vless.txt",
-              "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality",
+              # igareck
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
+              # barry-far
               "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
-              "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/vless.txt",
-              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt",
-              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt"
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub6.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub7.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub8.txt"
           ]
 
-          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "KP", "CU", "SY"}
-          BLOCKED_ORGS = [
-              "cloudflare", "fastly", "cloudfront",
-              "irancell", "mci", "asiatech", "telecommunication company of iran",
-              "mcci", "mobile telecommunication", "afranet", "pars online"
-          ]
-
-          BAD_SNIS = {"google.com", "speedtest.net", "cloudflare.com", "workers.dev"}
-          PROTO_REGEX = re.compile(r'(vless://[^\s\'"<>]+)', re.IGNORECASE)
+          PROTO_REGEX = re.compile(r'((?:vless|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
 
           def decode_if_base64(text):
               try:
                   decoded = base64.b64decode(text.strip()).decode('utf-8', errors='ignore')
-                  if "vless://" in decoded:
+                  if any(p in decoded for p in ["vless://", "trojan://", "ss://"]):
                       return decoded
               except Exception:
                   pass
               return text
 
-          def is_dpi_survival_reality(link):
-              try:
-                  clean = link.split("#")[0].strip()
-                  if not clean.startswith("vless://") or "security=reality" not in clean.lower():
-                      return False
-                  
-                  p = urlparse(clean)
-                  if not p.hostname or not p.port or not p.username:
-                      return False
-
-                  host = p.hostname.lower()
-                  if host.endswith(".ir") or host.endswith(".cn") or host.endswith(".ru"):
-                      return False
-
-                  params = parse_qs(p.query)
-                  if not params.get("pbk"):
-                      return False
-
-                  sni = params.get("sni", [""])[0].lower()
-                  if any(bad in sni for bad in BAD_SNIS):
-                      return False
-
-                  return True
-              except Exception:
-                  return False
-
           print("=" * 80)
-          print("[1/3] СБОР И ФИЛЬТРАЦИЯ КАНДИДАТОВ ПО КРИТЕРИЯМ ТСПУ РФ...")
+          print("[1/3] СКАЧИВАНИЕ БАЗ IGACK & BARRY-FAR...")
           print("=" * 80, flush=True)
 
-          collected_links = set()
+          collected_nodes = set()
           for url in SOURCES:
               try:
                   resp = requests.get(url, timeout=12)
                   if resp.status_code == 200:
                       content = decode_if_base64(resp.text)
                       matches = PROTO_REGEX.findall(content)
-                      valid_cnt = 0
+                      count = 0
                       for m in matches:
                           m = m.strip()
-                          if is_dpi_survival_reality(m):
-                              clean_base = m.split("#")[0].strip()
-                              if clean_base not in collected_links:
-                                  collected_links.add(m)
-                                  valid_cnt += 1
+                          clean_base = m.split("#")[0].strip()
+                          if clean_base not in collected_nodes:
+                              collected_nodes.add(m)
+                              count += 1
                       source_name = "/".join(url.split("/")[-2:])
-                      print(f"[+] {source_name}: отобрано {valid_cnt} Reality-нод", flush=True)
+                      print(f"[+] {source_name}: извлечено {count} шт.", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка {url}: {e}", flush=True)
 
-          candidates = list(collected_links)
+          candidates = list(collected_nodes)
           random.shuffle(candidates)
-          print(f"\n[*] Итого чистых кандидатов для стресс-теста: {len(candidates)}", flush=True)
+          print(f"\n[*] Всего уникальных кандидатов для тестирования: {len(candidates)}", flush=True)
 
           if not candidates:
-              print("[!] Нет кандидатов для проверки.")
+              print("[!] Нет кандидатов.")
               sys.exit(0)
 
           def build_xray_config(link, socks_port):
@@ -155,50 +123,71 @@ jobs:
                   clean = link.split("#")[0].strip()
                   p = urlparse(clean)
                   params = parse_qs(p.query)
+                  proto = p.scheme.lower()
+                  host = p.hostname
+                  port = int(p.port)
 
-                  user = {"id": p.username, "encryption": "none"}
-                  flow = params.get("flow", [""])[0]
-                  net = params.get("type", ["tcp"])[0]
-
-                  if flow:
-                      user["flow"] = flow
-                  elif net == "tcp":
-                      user["flow"] = "xtls-rprx-vision"
-
-                  reality_settings = {
-                      "show": False,
-                      "fingerprint": params.get("fp", ["chrome"])[0],
-                      "serverName": params.get("sni", [p.hostname])[0],
-                      "publicKey": params.get("pbk", [""])[0]
+                  inbound = {
+                      "listen": "127.0.0.1",
+                      "port": socks_port,
+                      "protocol": "socks",
+                      "settings": {"auth": "noauth", "udp": True}
                   }
-                  if params.get("sid", [""])[0]:
-                      reality_settings["shortId"] = params.get("sid")[0]
 
-                  stream = {
-                      "network": net,
-                      "security": "reality",
-                      "realitySettings": reality_settings
-                  }
-                  if net == "grpc":
-                      srv = params.get("serviceName", [""])[0]
-                      if srv:
-                          stream["grpcSettings"] = {"serviceName": srv}
+                  if proto == "vless":
+                      user = {"id": p.username, "encryption": "none"}
+                      flow = params.get("flow", [""])[0]
+                      net = params.get("type", ["tcp"])[0]
+
+                      if flow:
+                          user["flow"] = flow
+                      elif net == "tcp" and "security=reality" in clean.lower():
+                          user["flow"] = "xtls-rprx-vision"
+
+                      stream = {"network": net}
+
+                      if "security=reality" in clean.lower():
+                          reality_settings = {
+                              "show": False,
+                              "fingerprint": params.get("fp", ["chrome"])[0],
+                              "serverName": params.get("sni", [host])[0],
+                              "publicKey": params.get("pbk", [""])[0]
+                          }
+                          if params.get("sid", [""])[0]:
+                              reality_settings["shortId"] = params.get("sid")[0]
+                          stream["security"] = "reality"
+                          stream["realitySettings"] = reality_settings
+                      elif "security=tls" in clean.lower():
+                          stream["security"] = "tls"
+                          stream["tlsSettings"] = {"serverName": params.get("sni", [host])[0]}
+
+                      if net == "grpc":
+                          srv = params.get("serviceName", [""])[0]
+                          if srv:
+                              stream["grpcSettings"] = {"serviceName": srv}
+
+                      outbound = {
+                          "protocol": "vless",
+                          "settings": {"vnext": [{"address": host, "port": port, "users": [user]}]},
+                          "streamSettings": stream
+                      }
+                  elif proto == "trojan":
+                      outbound = {
+                          "protocol": "trojan",
+                          "settings": {"servers": [{"address": host, "port": port, "password": p.username}]},
+                          "streamSettings": {
+                              "network": params.get("type", ["tcp"])[0],
+                              "security": "tls",
+                              "tlsSettings": {"serverName": params.get("sni", [host])[0]}
+                          }
+                      }
+                  else:
+                      return None
 
                   return {
                       "log": {"loglevel": "none"},
-                      "inbounds": [{
-                          "listen": "127.0.0.1",
-                          "port": socks_port,
-                          "protocol": "socks",
-                          "settings": {"auth": "noauth", "udp": True}
-                      }],
-                      "outbounds": [{
-                          "protocol": "vless",
-                          "settings": {
-                              "vnext": [{"address": p.hostname, "port": int(p.port), "users": [user]}]
-                          },
-                          "streamSettings": stream
-                      }]
+                      "inbounds": [inbound],
+                      "outbounds": [outbound]
                   }
               except Exception:
                   return None
@@ -213,15 +202,15 @@ jobs:
                       time.sleep(0.04)
               return False
 
-          verified_working = []
+          verified_nodes = []
           lock = threading.Lock()
           tested_count = 0
 
           print("\n" + "=" * 80)
-          print(f"[2/3] СКВОЗНОЕ ТЕСТИРОВАНИЕ XRAY ➔ TELEGRAM ➔ GOOGLE AI STUDIO...")
+          print("[2/3] ТЕСТИРОВАНИЕ XRAY ➔ TELEGRAM ➔ GOOGLE AI STUDIO...")
           print("=" * 80, flush=True)
 
-          def test_node_worker(item):
+          def test_worker(item):
               global tested_count
               idx, link, worker_id = item
 
@@ -230,7 +219,7 @@ jobs:
               if not cfg:
                   return
 
-              cfg_file = f"xray_cfg_{worker_id}.json"
+              cfg_file = f"cfg_{worker_id}.json"
               with open(cfg_file, "w") as f:
                   json.dump(cfg, f)
 
@@ -252,28 +241,12 @@ jobs:
                       "Accept-Language": "en-US,en;q=0.9"
                   }
 
-                  # 1. Проверка ASN и Геолокации
-                  try:
-                      ip_data = requests.get("http://ip-api.com/json/?fields=status,countryCode,isp,org,as,query", proxies=proxies, timeout=3.5).json()
-                      if ip_data.get("status") != "success":
-                          return
-
-                      country = ip_data.get("countryCode", "").upper()
-                      org_text = (ip_data.get("org", "") + " " + ip_data.get("isp", "") + " " + ip_data.get("as", "")).lower()
-
-                      if country in BLOCKED_COUNTRIES or any(bad in org_text for bad in BLOCKED_ORGS):
-                          return
-                      
-                      clean_org = ip_data.get("org") or ip_data.get("isp") or country
-                  except Exception:
-                      return
-
-                  # 2. Проверка полезной нагрузки Telegram API
+                  # 1. Проверка Telegram (полезная нагрузка)
                   tg_res = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.0)
                   if tg_res.status_code not in [200, 302, 404]:
                       return
 
-                  # 3. Прямой строгий тест Google AI Studio (без геоблока)
+                  # 2. Проверка Google AI Studio (без геоблока)
                   t0 = time.time()
                   ai_res = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
                   latency = int((time.time() - t0) * 1000)
@@ -285,7 +258,8 @@ jobs:
                       if "available_regions" not in final_url and "available-regions" not in final_url and "not available in your country" not in body:
                           is_valid = True
                           p = urlparse(link.split("#")[0])
-                          info_str = f"Страна: {country} ({clean_org}) | Задержка AI Studio: {latency}ms | Узел: {p.hostname}:{p.port}"
+                          remark = link.split("#")[-1] if "#" in link else f"{p.hostname}:{p.port}"
+                          info_str = f"Пинг AI Studio: {latency}ms | Узел: {remark}"
               except Exception:
                   pass
               finally:
@@ -304,38 +278,36 @@ jobs:
               with lock:
                   tested_count += 1
                   if is_valid:
-                      verified_working.append(link)
-                      print(f"[🔥] [{len(verified_working):02d} НАЙДЕНО] {info_str}", flush=True)
+                      verified_nodes.append(link)
+                      print(f"[🔥] [{len(verified_nodes):02d} НАЙДЕНО] {info_str}", flush=True)
 
-          test_pool = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates[:300])]
+          # Берем первые 250 кандидатов
+          test_pool = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates[:250])]
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-              list(executor.map(test_node_worker, test_pool))
+              list(executor.map(test_worker, test_pool))
 
           now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
           print("\n" + "=" * 80)
-          print(f"[3/3] ИТОГИ ВАЛИДАЦИИ:")
-          print(f"[*] Проверено кандидатов: {tested_count}")
-          print(f"[*] Найдено 100% РАБОЧИХ ДЛЯ AI STUDIO: {len(verified_working)}")
-          print(f"[*] Время обновления: {now_str}")
+          print(f"[3/3] ИТОГИ: Проверено {tested_count}, Найдено рабочих: {len(verified_nodes)}")
           print("=" * 80, flush=True)
 
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              f.write(f"# Last Updated: {now_str} | Working Servers: {len(verified_working)}\n")
-              for c in verified_working:
+              f.write(f"# Last Updated: {now_str} | Working: {len(verified_nodes)}\n")
+              for c in verified_nodes:
                   f.write(c + "\n")
 
-          if verified_working:
-              b64_sub = base64.b64encode(("\n".join(verified_working) + "\n").encode('utf-8')).decode('utf-8')
+          if verified_nodes:
+              b64_sub = base64.b64encode(("\n".join(verified_nodes) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_sub)
-              print("[+] sub.txt и clean_configs.txt успешно созданы.")
+              print("[+] sub.txt и clean_configs.txt успешно записаны.")
           else:
               open("sub.txt", "w").close()
-              print("[!] Внимание: В этом цикле не найдено подходящих узлов.")
+              print("[!] В этом цикле рабочие узлы не обнаружены.")
           EOF
-          python3 -u full_pipeline.py
+          python3 -u run_validator.py
 
       - name: Commit and Push to Repository
         run: |
@@ -343,18 +315,18 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git pull --rebase || true
           git add sub.txt clean_configs.txt
-          git commit -m "Verified AI Studio Sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
+          git commit -m "Update igareck & barry-far sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
           git push
 
-      - name: Publish Instant-Release (Zero-Cache & Works in Russia)
+      - name: Publish Instant-Release (Zero-Cache & Unblocked)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[*] Обновление GitHub Release (мгновенная отдача без кэша)..."
+          echo "[*] Обновление GitHub Release..."
           git tag -f latest
           git push origin latest -f || true
           gh release delete latest -y || true
           gh release create latest sub.txt clean_configs.txt \
-            --title "Latest Verified AI Studio Nodes" \
+            --title "Latest igareck & barry-far Verified Nodes" \
             --notes "Автоматическое обновление: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          echo "[+] Релиз успешно обновлен."
+          echo "[+] Релиз обновлен."
