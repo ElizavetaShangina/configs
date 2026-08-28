@@ -10,7 +10,7 @@ permissions:
 
 env:
   TARGET_SITE: "https://aistudio.google.com/prompts/new_chat"
-  URL_5: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+  URL_5: "hhttps://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub6.txt"
   URL_6: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt"
   URL_7: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
   URL_8: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt"
