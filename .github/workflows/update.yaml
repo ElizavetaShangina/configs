@@ -107,44 +107,66 @@ jobs:
       - name: Run High-Speed AI Studio Validation
         run: |
           if [ -s all_configs.txt ]; then
-            echo "[*] Запуск нативного тестирования xray-knife против Google AI Studio..."
-            
-            # xray-knife http тестирует напрямую ядрами с лимитом на 20 успешно прошедших
+            echo "[*] Запуск тестирования через xray-knife..."
             ./xray-knife http -f all_configs.txt \
-              -t 40 \
+              -t 30 \
               --test-urls "${{ env.TARGET_SITE }}" \
-              --max-passed 20 \
-              -o best_raw.txt || true
-              
-            # Если xray-knife сохранил результат
-            if [ -f best_raw.txt ] && [ -s best_raw.txt ]; then
-              head -n 20 best_raw.txt > best.txt
-              echo "[+] Успешно отобрано $(wc -l < best.txt) рабочих конфигураций."
-            else
-              echo "[!] best_raw.txt пуст."
-              touch best.txt
-            fi
-          else
-            echo "[!] Файл all_configs.txt пуст."
-            touch best.txt
+              --max-passed 25 \
+              -o xray_out.txt || true
           fi
 
-      - name: Base64 Encode Output
+      - name: Sanitize and Filter for V2Ray / Xray
         run: |
-          if [ -s best.txt ]; then
-            cat best.txt | base64 -w 0 > sub.txt
-            echo "[+] sub.txt обновлен."
-          else
-            echo "[!] Рабочих прокси не обнаружено."
-            > sub.txt
-          fi
-          
+          cat << 'EOF' > format_sub.py
+          import re
+          import base64
+          import os
+
+          # Разрешаем только протоколы, нативно поддерживаемые v2ray/xray
+          ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
+          URI_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
+
+          cleaned_configs = []
+
+          for filename in ["xray_out.txt", "best_raw.txt", "best.txt"]:
+              if os.path.exists(filename):
+                  with open(filename, "r", encoding="utf-8", errors="ignore") as f:
+                      for line in f:
+                          matches = URI_REGEX.findall(line)
+                          for match in matches:
+                              match = match.strip()
+                              if match.startswith(ALLOWED_SCHEMES) and match not in cleaned_configs:
+                                  cleaned_configs.append(match)
+
+          # Ограничиваем первыми 20 рабочими
+          final_configs = cleaned_configs[:20]
+
+          print(f"[+] Отфильтровано чистых v2ray/xray конфигураций: {len(final_configs)}")
+
+          # Сохраняем в открытом виде
+          with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
+              for c in final_configs:
+                  f.write(c + "\n")
+
+          # Сохраняем Base64 подписку
+          if final_configs:
+              joined_text = "\n".join(final_configs) + "\n"
+              b64_sub = base64.b64encode(joined_text.encode('utf-8')).decode('utf-8')
+              with open("sub.txt", "w", encoding="utf-8") as f:
+                  f.write(b64_sub)
+              print("[+] sub.txt успешно сформирован в Base64.")
+          else:
+              open("sub.txt", "w").close()
+              print("[!] Рабочих конфигураций нужных протоколов не найдено.")
+          EOF
+          python3 format_sub.py
+
       - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           if [ -s sub.txt ]; then
-            git add sub.txt
-            git commit -m "Update working AI Studio proxies: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git add sub.txt clean_configs.txt
+            git commit -m "Update valid V2Ray/Xray configs: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
             git push
           fi
