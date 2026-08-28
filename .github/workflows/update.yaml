@@ -33,7 +33,7 @@ jobs:
           chmod +x xray-knife
           ./xray-knife version || true
 
-      - name: Fetch and Normalize Fresh Nodes
+      - name: Fetch and Filter ONLY RKN-Bypass Reality Nodes
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -44,13 +44,14 @@ jobs:
           import requests
           from urllib.parse import urlparse, parse_qs
 
+          # Только специализированные RKN-Bypass источники (БЕЗ BLACK-листов!)
           SOURCES = [
-              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
+              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
+              "https://raw.githubusercontent.com/vsvavan2/vpn-config-rkn/main/output/all_working_keys.txt",
               "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/githubmirror/clean/vless.txt",
               "https://raw.githubusercontent.com/MustafaBaqer/VestraNet-Nodes/main/protocols/vless.txt",
               "https://raw.githubusercontent.com/slxkware/Vless-list/raw/refs/heads/main/vless.txt",
-              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/raw/main/Splitted-By-Protocol/vless.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/raw/main/Splitted-By-Protocol/vless.txt"
+              "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality"
           ]
 
           BAD_SNIS = {"google.com", "speedtest.net", "cloudflare.com", "workers.dev"}
@@ -64,22 +65,27 @@ jobs:
                   pass
               return text
 
-          def normalize_vless(link):
+          def normalize_and_filter(link):
               try:
                   clean_link = link.split("#")[0].strip()
                   remark = link.split("#")[1].strip() if "#" in link else ""
+                  
+                  # 1. ЖЕСТКИЙ БАН НА ВСЕ BL (BLACK LIST) СЕРВЕРЫ
+                  full_text = link.lower()
+                  if "[bl]" in full_text or "bl_" in full_text or "black" in full_text:
+                      return None
                   
                   if not clean_link.startswith("vless://"):
                       return None
                   
                   p = urlparse(clean_link)
                   host = p.hostname.lower() if p.hostname else ""
-                  if not host or host.endswith(".ir") or host.endswith(".cn"):
+                  if not host or host.endswith(".ir") or host.endswith(".cn") or host.endswith(".ru"):
                       return None
                       
                   params = parse_qs(p.query)
                   
-                  # Проверка наличия Reality ключа
+                  # 2. Проверка VLESS Reality
                   if "security=reality" in clean_link.lower():
                       if not params.get("pbk"):
                           return None
@@ -87,7 +93,7 @@ jobs:
                       if any(bad in sni for bad in BAD_SNIS):
                           return None
                       
-                      # ИСПРАВЛЕНИЕ: Автоматически добавляем flow=xtls-rprx-vision если его нет
+                      # 3. Добавляем Vision для пробива ТСПУ
                       if "flow=" not in clean_link and "type=tcp" in clean_link:
                           clean_link += "&flow=xtls-rprx-vision"
 
@@ -97,7 +103,7 @@ jobs:
 
           collected = set()
           print("=" * 70, flush=True)
-          print("[*] СБОР И АВТО-НОРМАЛИЗАЦИЯ VLESS РЕАЛИТИ УЗЛОВ", flush=True)
+          print("[*] СБОР УЗЛОВ С ПРИНУДИТЕЛЬНОЙ БЛОКИРОВКОЙ ВСЕХ [BL] СЕРВЕРОВ", flush=True)
           print("=" * 70, flush=True)
 
           for url in SOURCES:
@@ -108,17 +114,18 @@ jobs:
                       matches = re.findall(r'(vless://[^\s\'"<>]+)', text, re.IGNORECASE)
                       count = 0
                       for m in matches:
-                          norm = normalize_vless(m)
+                          norm = normalize_and_filter(m)
                           if norm:
                               collected.add(norm)
                               count += 1
-                      print(f"[+] {url.split('/')[-1]}: получено {count} валидных", flush=True)
+                      print(f"[+] {url.split('/')[-1]}: принято {count} чистых узлов", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка {url.split('/')[-1]}: {e}", flush=True)
 
           unique_list = list(collected)
-          print(f"\n[*] Всего уникальных нормализованных узлов: {len(unique_list)}", flush=True)
+          print(f"\n[*] Итого уникальных кандидатов (0% BL-серверов): {len(unique_list)}", flush=True)
 
+          # Перемешиваем
           random.shuffle(unique_list)
 
           with open("candidates.txt", "w", encoding="utf-8") as f:
@@ -127,16 +134,15 @@ jobs:
           EOF
           python3 prepare.py
 
-      - name: High-Speed Native Payload Test (Real Tunnel Check)
+      - name: High-Speed Native Payload Test (Cloudflare Trace)
         run: |
           if [ -s candidates.txt ]; then
             echo "================================================================================"
-            echo "[*] Запуск нативного Go-тестера через Cloudflare Payload Check..."
+            echo "[*] Тестирование реальной передачи данных (Cloudflare Trace Payload)..."
             echo "================================================================================"
             
-            # Тестируем реальную доставку данных через Cloudflare Trace
             ./xray-knife http -f candidates.txt \
-              -t 30 \
+              -t 25 \
               --timeout 3500 \
               --test-urls "https://cloudflare.com/cdn-cgi/trace" \
               --max-passed 20 \
@@ -159,13 +165,14 @@ jobs:
                       matches = URI_REGEX.findall(line)
                       for m in matches:
                           m = m.strip()
-                          if m not in cleaned:
+                          # Повторная фильтрация от BL-меток
+                          if "[bl]" not in m.lower() and "bl_" not in m.lower() and m not in cleaned:
                               cleaned.append(m)
 
           final_configs = cleaned[:20]
 
           print("\n" + "=" * 70)
-          print(f"[ИТОГ] Отобрано {len(final_configs)} гарантированно РАБОТАЮЩИХ конфигураций!")
+          print(f"[ИТОГ] Сформировано {len(final_configs)} проверенных конфигураций (без BL)!")
           print("=" * 70)
 
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
@@ -176,10 +183,10 @@ jobs:
               b64_sub = base64.b64encode(("\n".join(final_configs) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_sub)
-              print("[+] sub.txt и clean_configs.txt успешно обновлены.")
+              print("[+] sub.txt и clean_configs.txt успешно записаны.")
           else:
               open("sub.txt", "w").close()
-              print("[!] К сожалению, рабочие узлы не обнаружены.")
+              print("[!] Рабочие узлы не найдены.")
           EOF
           python3 make_sub.py
 
@@ -189,6 +196,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s clean_configs.txt ]; then
             git add sub.txt clean_configs.txt
-            git commit -m "Update confirmed working configs: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git commit -m "Update RKN-Bypass configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
             git push
           fi
