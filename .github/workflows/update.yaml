@@ -60,9 +60,8 @@ jobs:
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
           AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
-          CONCURRENCY = 4 # Оптимально для 2 vCPU на раннере GitHub
+          CONCURRENCY = 4
 
-          # Источники с высоким содержанием VLESS Reality
           SOURCES = [
               "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
               "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs_base64.txt",
@@ -74,17 +73,13 @@ jobs:
               "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt"
           ]
 
-          # Страны, заблокированные в Google AI Studio
           BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "KP", "CU", "SY"}
-
-          # Провайдеры, заблокированные ТСПУ в РФ или отдающие фейковый трафик
           BLOCKED_ORGS = [
               "cloudflare", "fastly", "cloudfront",
               "irancell", "mci", "asiatech", "telecommunication company of iran",
               "mcci", "mobile telecommunication", "afranet", "pars online"
           ]
 
-          # Заведомо мертвые/глушимые в РФ SNI
           BAD_SNIS = {"google.com", "speedtest.net", "cloudflare.com", "workers.dev"}
           PROTO_REGEX = re.compile(r'(vless://[^\s\'"<>]+)', re.IGNORECASE)
 
@@ -152,10 +147,9 @@ jobs:
           print(f"\n[*] Итого чистых кандидатов для стресс-теста: {len(candidates)}", flush=True)
 
           if not candidates:
-              print("[!] Нет кандидатов для проверки. Завершение.")
+              print("[!] Нет кандидатов для проверки.")
               sys.exit(0)
 
-          # Генератор Xray конфигурации
           def build_xray_config(link, socks_port):
               try:
                   clean = link.split("#")[0].strip()
@@ -313,7 +307,6 @@ jobs:
                       verified_working.append(link)
                       print(f"[🔥] [{len(verified_working):02d} НАЙДЕНО] {info_str}", flush=True)
 
-          # Берем первые 300 кандидатов для полного прогона
           test_pool = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates[:300])]
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
@@ -328,25 +321,23 @@ jobs:
           print(f"[*] Время обновления: {now_str}")
           print("=" * 80, flush=True)
 
-          # Сохранение открытого списка
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
               f.write(f"# Last Updated: {now_str} | Working Servers: {len(verified_working)}\n")
               for c in verified_working:
                   f.write(c + "\n")
 
-          # Сохранение Base64-подписки
           if verified_working:
               b64_sub = base64.b64encode(("\n".join(verified_working) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_sub)
-              print("[+] sub.txt и clean_configs.txt успешно сгенерированы.")
+              print("[+] sub.txt и clean_configs.txt успешно созданы.")
           else:
               open("sub.txt", "w").close()
               print("[!] Внимание: В этом цикле не найдено подходящих узлов.")
           EOF
           python3 -u full_pipeline.py
 
-      - name: Commit and Push
+      - name: Commit and Push to Repository
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
@@ -355,7 +346,15 @@ jobs:
           git commit -m "Verified AI Studio Sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
           git push
 
-      - name: Purge jsDelivr CDN Cache
+      - name: Publish Instant-Release (Zero-Cache & Works in Russia)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/sub.txt" || true
-          curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/clean_configs.txt" || true
+          echo "[*] Обновление GitHub Release (мгновенная отдача без кэша)..."
+          git tag -f latest
+          git push origin latest -f || true
+          gh release delete latest -y || true
+          gh release create latest sub.txt clean_configs.txt \
+            --title "Latest Verified AI Studio Nodes" \
+            --notes "Автоматическое обновление: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo "[+] Релиз успешно обновлен."
