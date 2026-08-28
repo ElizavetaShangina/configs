@@ -49,7 +49,6 @@ jobs:
       - name: Real Proxy Validation (Google AI Studio Strict Check)
         run: |
           cat << 'EOF' > deep_validate.py
-          cat << 'EOF' > deep_validate.py
           import subprocess
           import time
           import requests
