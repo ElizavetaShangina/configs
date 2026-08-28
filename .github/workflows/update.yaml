@@ -20,10 +20,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Python Dependencies
-        run: pip install requests pysocks urllib3
+      - name: Install Dependencies
+        run: pip install requests urllib3
 
-      - name: Install Official Xray-Core
+      - name: Install Xray-Core
         run: |
           URL=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.assets[] | select(.name == "Xray-linux-64.zip") | .browser_download_url')
           wget -qO xray.zip "$URL"
@@ -31,29 +31,29 @@ jobs:
           mv xray_bin/xray ./xray
           chmod +x xray
 
-      - name: Fetch and Filter Compatible Reality Nodes
+      - name: Fetch, Filter (DPI-Bypass) and Randomize Nodes
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > prepare_nodes.py
+          cat << 'EOF' > get_and_filter.py
           import base64
-          import os
+          import random
           import re
           import requests
           from urllib.parse import urlparse, parse_qs
 
+          # Динамические агрегаторы, собирающие свежие узлы из сотен Telegram-каналов
           SOURCES = [
-              # Специализированные российские репозитории
-              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
-              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-              "https://raw.githubusercontent.com/VOID-Anonymity/V.O.I.D-VPN_Bypass/refs/heads/main/url_work.txt",
-              "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/githubmirror/clean/vless.txt",
-              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/All_Configs_Sub.txt"
+              "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality",
+              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt",
+              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt",
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt"
           ]
 
-          # Заблокированные страны для Google AI Studio и хосты
-          BLOCKED_HOST_SUFFIXES = (".ir", ".cn", ".ru", ".by", ".cu", ".kp")
-          URI_REGEX = re.compile(r'(vless://[^\s\'"<>]+)', re.IGNORECASE)
+          # Строгие регулярки для проверки SNI (домен должен быть похож на настоящий)
+          DOMAIN_REGEX = re.compile(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+          # Исключаем SNI, за которые в РФ часто прилетает блок или шейп
+          BAD_SNI = {"google.com", "cloudflare.com", "speedtest.net", "workers.dev"}
 
           def decode_if_base64(text):
               try:
@@ -64,85 +64,80 @@ jobs:
                   pass
               return text
 
-          def is_v2ray_compatible_reality(link):
-              if not link.startswith("vless://"):
+          def is_survival_config(link):
+              if not link.lower().startswith("vless://"):
                   return False
-              
-              link_lower = link.lower()
-              if "security=reality" not in link_lower:
-                  return False
-
-              # Отсекаем неподдерживаемый xhttp/splithttp
-              if "type=xhttp" in link_lower or "type=splithttp" in link_lower:
+              if "security=reality" not in link.lower():
                   return False
 
               try:
                   p = urlparse(link)
-                  host = p.hostname.lower() if p.hostname else ""
+                  params = parse_qs(p.query)
                   
-                  # Отсекаем Иран, Китай, РФ
-                  if any(host.endswith(sfx) for sfx in BLOCKED_HOST_SUFFIXES):
+                  # 1. ТСПУ часто режет нестандартные порты. Разрешаем только 443
+                  if p.port != 443:
                       return False
 
-                  params = parse_qs(p.query)
-                  pbk = params.get("pbk", [""])[0]
-                  if not pbk:
+                  # 2. Проверка SNI на реалистичность
+                  sni = params.get("sni", [""])[0].lower()
+                  if not sni or not DOMAIN_REGEX.match(sni):
+                      return False
+                  if any(bad in sni for bad in BAD_SNI):
+                      return False
+
+                  # 3. Отсекаем Иранские и подозрительные китайские домены
+                  host = p.hostname.lower() if p.hostname else ""
+                  if host.endswith(".ir") or host.endswith(".cn"):
+                      return False
+
+                  # 4. Протокол должен быть только TCP (xtls-rprx-vision) или gRPC
+                  net = params.get("type", ["tcp"])[0]
+                  if net not in ["tcp", "grpc"]:
                       return False
 
                   return True
               except Exception:
                   return False
 
-          collected = []
+          collected = set()
           for url in SOURCES:
               try:
-                  print(f"[*] Загрузка: {url}", flush=True)
-                  resp = requests.get(url, timeout=12)
+                  print(f"[*] Скачивание свежих дампов: {url}", flush=True)
+                  resp = requests.get(url, timeout=15)
                   if resp.status_code == 200:
                       text = decode_if_base64(resp.text)
-                      matches = URI_REGEX.findall(text)
-                      count = 0
+                      matches = re.findall(r'(vless://[^\s\'"<>]+)', text, re.IGNORECASE)
                       for m in matches:
                           m = m.strip()
-                          if is_v2ray_compatible_reality(m):
-                              collected.append(m)
-                              count += 1
-                      print(f"[+] Подходящих TCP/Reality узлов: {count}", flush=True)
+                          if is_survival_config(m):
+                              collected.add(m)
               except Exception as e:
-                  print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
+                  print(f"[!] Ошибка {url}: {e}")
 
-          # Дедупликация
-          unique = []
-          seen = set()
-          for c in collected:
-              try:
-                  p = urlparse(c)
-                  key = f"{p.hostname}:{p.port}"
-                  if key not in seen and p.hostname and p.port:
-                      seen.add(key)
-                      unique.append(c)
-              except Exception:
-                  pass
+          unique_list = list(collected)
+          print(f"\n[*] Собрано и отфильтровано для РФ: {len(unique_list)} узлов.", flush=True)
 
-          print(f"\n[+] Итого уникальных совместимых кандидатов: {len(unique)}", flush=True)
+          # САМОЕ ГЛАВНОЕ: Рандомизация! Чтобы каждый запуск давал новые узлы.
+          random.shuffle(unique_list)
+
+          # Оставляем 500 случайных кандидатов для тестирования
           with open("nodes_to_test.txt", "w", encoding="utf-8") as f:
-              for c in unique[:400]:
+              for c in unique_list[:500]:
                   f.write(c + "\n")
           EOF
-          python3 prepare_nodes.py
+          python3 get_and_filter.py
 
-      - name: Double-Check Validation (Telegram + Google AI Studio)
+      - name: True End-to-End Test (AI Studio + Telegram)
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > test_tg_and_ai.py
+          cat << 'EOF' > deep_test.py
           import base64
           import concurrent.futures
           import json
           import os
           import socket
           import subprocess
-          import sys
           import threading
           import time
           from urllib.parse import urlparse, parse_qs
@@ -153,192 +148,112 @@ jobs:
           urllib3.disable_warnings()
 
           TARGET_GOAL = 15
-          CONCURRENCY = 10
-          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "CU", "KP"}
+          CONCURRENCY = 15
 
           def build_xray_config(link, socks_port):
               try:
                   p = urlparse(link)
                   params = parse_qs(p.query)
-                  host = p.hostname
-                  port = int(p.port)
-                  uuid = p.username
-
+                  
+                  user_obj = {"id": p.username, "encryption": "none"}
                   flow = params.get("flow", [""])[0]
-                  pbk = params.get("pbk", [""])[0]
-                  sid = params.get("sid", [""])[0]
-                  sni = params.get("sni", [host])[0]
-                  fp = params.get("fp", ["chrome"])[0]
-                  net = params.get("type", ["tcp"])[0]
+                  if flow: user_obj["flow"] = flow
 
-                  user_obj = {"id": uuid, "encryption": "none"}
-                  if flow:
-                      user_obj["flow"] = flow
-
-                  reality_settings = {
-                      "show": False,
-                      "fingerprint": fp or "chrome",
-                      "serverName": sni or host,
-                      "publicKey": pbk
-                  }
-                  if sid:
-                      reality_settings["shortId"] = sid
-
-                  stream_settings = {
-                      "network": net,
+                  stream = {
+                      "network": params.get("type", ["tcp"])[0],
                       "security": "reality",
-                      "realitySettings": reality_settings
+                      "realitySettings": {
+                          "show": False,
+                          "fingerprint": params.get("fp", ["chrome"])[0],
+                          "serverName": params.get("sni", [p.hostname])[0],
+                          "publicKey": params.get("pbk", [""])[0]
+                      }
                   }
-
-                  if net == "grpc":
-                      service_name = params.get("serviceName", [""])[0]
-                      if service_name:
-                          stream_settings["grpcSettings"] = {"serviceName": service_name}
+                  if params.get("sid", [""])[0]:
+                      stream["realitySettings"]["shortId"] = params.get("sid")[0]
+                  if stream["network"] == "grpc":
+                      stream["grpcSettings"] = {"serviceName": params.get("serviceName", [""])[0]}
 
                   return {
                       "log": {"loglevel": "none"},
-                      "inbounds": [{
-                          "listen": "127.0.0.1",
-                          "port": socks_port,
-                          "protocol": "socks",
-                          "settings": {"auth": "noauth", "udp": True}
-                      }],
-                      "outbounds": [{
-                          "protocol": "vless",
-                          "settings": {
-                              "vnext": [{"address": host, "port": port, "users": [user_obj]}]
-                          },
-                          "streamSettings": stream_settings
-                      }]
+                      "inbounds": [{"listen": "127.0.0.1", "port": socks_port, "protocol": "socks", "settings": {"auth": "noauth", "udp": True}}],
+                      "outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": p.hostname, "port": int(p.port), "users": [user_obj]}]}, "streamSettings": stream}]
                   }
               except Exception:
                   return None
 
-          def wait_for_port(port, timeout=1.2):
-              t0 = time.time()
-              while time.time() - t0 < timeout:
-                  try:
-                      with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                          return True
-                  except Exception:
-                      time.sleep(0.04)
-              return False
-
-          def test_node(item):
+          def check_node(item):
               idx, link, worker_id = item
-              if stop_event.is_set():
-                  return
+              if stop_event.is_set(): return
 
-              port = 32000 + worker_id
+              port = 30000 + worker_id
               cfg = build_xray_config(link, port)
-              if not cfg:
-                  return
+              if not cfg: return
 
-              cfg_file = f"xray_{worker_id}.json"
-              with open(cfg_file, "w") as f:
-                  json.dump(cfg, f)
+              cfg_path = f"cfg_{worker_id}.json"
+              with open(cfg_path, "w") as f: json.dump(cfg, f)
 
               proc = None
               try:
-                  proc = subprocess.Popen(["./xray", "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  if not wait_for_port(port, timeout=1.0):
-                      return
+                  proc = subprocess.Popen(["./xray", "run", "-c", cfg_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  time.sleep(0.5)
+                  
+                  proxies = {"http": f"socks5h://127.0.0.1:{port}", "https": f"socks5h://127.0.0.1:{port}"}
+                  headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36"}
 
-                  proxies = {
-                      "http": f"socks5h://127.0.0.1:{port}",
-                      "https": f"socks5h://127.0.0.1:{port}"
-                  }
-                  headers = {
-                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                  }
+                  # 1. Быстрый тест на наличие реального интернета (отсеиваем мертвые за 1 сек)
+                  fast_test = requests.get("https://1.1.1.1", proxies=proxies, timeout=3.0)
+                  if fast_test.status_code != 200: return
 
-                  # 1. ТЕСТ TELEGRAM API (Проверка прохождения реального полезного трафика)
-                  tg_res = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.5)
-                  if tg_res.status_code not in [200, 404, 302]:
-                      return
+                  # 2. Тест Telegram
+                  tg = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.0)
+                  if tg.status_code not in [200, 404, 302]: return
 
-                  # 2. ТЕСТ СТРАНЫ ВЫХОДА (GeoIP)
-                  country = "UNKNOWN"
-                  try:
-                      geo_res = requests.get("https://api.country.is", proxies=proxies, timeout=2.5)
-                      if geo_res.status_code == 200:
-                          country = geo_res.json().get("country", "UNKNOWN").upper()
-                  except Exception:
-                      pass
+                  # 3. Тест AI Studio
+                  ai = requests.get("https://aistudio.google.com/prompts/new_chat", proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
+                  body, url = ai.text.lower(), ai.url.lower()
 
-                  if country in BLOCKED_COUNTRIES:
-                      return
-
-                  # 3. ТЕСТ GOOGLE AI STUDIO (Проверка отсутствия геоблока)
-                  t0 = time.time()
-                  ai_res = requests.get("https://aistudio.google.com/prompts/new_chat", proxies=proxies, headers=headers, timeout=4.5, allow_redirects=True)
-                  latency = int((time.time() - t0) * 1000)
-
-                  final_url = ai_res.url.lower()
-                  body = ai_res.text.lower()
-
-                  if ai_res.status_code in [200, 302]:
-                      if "available_regions" not in final_url and "available-regions" not in final_url and "not available in your country" not in body:
-                          with lock:
-                              if len(confirmed_nodes) < TARGET_GOAL:
-                                  confirmed_nodes.append(link)
-                                  p = urlparse(link)
-                                  print(f"[🌟] [{len(confirmed_nodes):02d}/{TARGET_GOAL:02d}] РАБОТАЕТ И TG, И AI STUDIO! | Страна: {country} | Пинг: {latency}ms | Хост: {p.hostname}:{p.port}", flush=True)
-                                  if len(confirmed_nodes) >= TARGET_GOAL:
-                                      print(f"\n[🎯] Набрано {TARGET_GOAL} подтвержденных конфигураций! Завершаем...", flush=True)
-                                      stop_event.set()
+                  # Проверка геоблока
+                  if ai.status_code in [200, 302] and "available_regions" not in url and "not available in your country" not in body:
+                      with lock:
+                          if len(working_nodes) < TARGET_GOAL:
+                              working_nodes.append(link)
+                              print(f"[🔥] [{len(working_nodes):02d}/{TARGET_GOAL:02d}] НАЙДЕН ТОПОВЫЙ УЗЕЛ! -> {urlparse(link).hostname}", flush=True)
+                              if len(working_nodes) >= TARGET_GOAL:
+                                  stop_event.set()
               except Exception:
                   pass
               finally:
                   if proc:
-                      try:
-                          proc.kill()
-                          proc.wait(timeout=0.2)
-                      except Exception:
-                          pass
-                  if os.path.exists(cfg_file):
-                      try:
-                          os.remove(cfg_file)
-                      except Exception:
-                          pass
+                      try: proc.kill()
+                      except: pass
 
-          confirmed_nodes = []
+          working_nodes = []
           lock = threading.Lock()
           stop_event = threading.Event()
 
-          with open("nodes_to_test.txt", "r", encoding="utf-8") as f:
-              nodes = [line.strip() for line in f if line.strip()]
+          with open("nodes_to_test.txt", "r") as f:
+              candidates = [line.strip() for line in f if line.strip()]
 
-          print("=" * 80)
-          print(f"[*] Запуск сквозного тестирования TG + AI Studio ({len(nodes)} кандидатов)...")
-          print("=" * 80, flush=True)
-
-          tasks = [(i, node, i % CONCURRENCY) for i, node in enumerate(nodes)]
+          print("=" * 70)
+          print(f"[*] СТАРТ ЖЕСТКОГО ТЕСТИРОВАНИЯ: {len(candidates)} случайных кандидатов...")
+          print("=" * 70, flush=True)
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-              futures = [executor.submit(test_node, t) for t in tasks]
-              for f in concurrent.futures.as_completed(futures):
-                  if stop_event.is_set():
-                      break
+              for _ in executor.map(check_node, [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]):
+                  if stop_event.is_set(): break
 
-          print("\n" + "=" * 80)
-          print(f"[ИТОГ] Отобрано рабочих конфигураций: {len(confirmed_nodes)}/{TARGET_GOAL}")
-          print("=" * 80, flush=True)
+          print("\n[+] Тестирование завершено! Сохраняем результат...")
+          with open("clean_configs.txt", "w") as f:
+              for c in working_nodes: f.write(c + "\n")
 
-          with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              for c in confirmed_nodes:
-                  f.write(c + "\n")
-
-          if confirmed_nodes:
-              b64_sub = base64.b64encode(("\n".join(confirmed_nodes) + "\n").encode('utf-8')).decode('utf-8')
-              with open("sub.txt", "w", encoding="utf-8") as f:
-                  f.write(b64_sub)
-              print("[+] sub.txt и clean_configs.txt успешно записаны.")
+          if working_nodes:
+              with open("sub.txt", "w") as f:
+                  f.write(base64.b64encode(("\n".join(working_nodes) + "\n").encode()).decode())
           else:
               open("sub.txt", "w").close()
-              print("[!] Не удалось найти рабочие узлы.")
           EOF
-          python3 -u test_tg_and_ai.py
+          python3 -u deep_test.py
 
       - name: Commit and Push
         run: |
@@ -346,6 +261,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s clean_configs.txt ]; then
             git add sub.txt clean_configs.txt
-            git commit -m "Update working TG + AI Studio configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
+            git commit -m "Ultra-Filtered Random Configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
             git push
           fi
