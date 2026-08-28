@@ -28,15 +28,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Python Dependencies
-        run: pip install requests PySocks
-
-      - name: Download Configs from Sources
-        run: |
-          touch public_raw.txt
-          wget -qO- "$URL_5" >> public_raw.txt
-          wget -qO- "$URL_6" >> public_raw.txt
-          wget -qO- "$URL_7" >> public_raw.txt
-          wget -qO- "$URL_8" >> public_raw.txt
+        run: pip install requests pysocks urllib3
 
       - name: Setup Xray-Knife
         run: |
@@ -46,106 +38,195 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Real Proxy Validation (Google AI Studio Strict Check)
+      - name: Download and Validate Proxies for Google AI Studio
         run: |
-          cat << 'EOF' > deep_validate.py
+          cat << 'EOF' > validate.py
+          import base64
+          import concurrent.futures
+          import os
+          import re
+          import socket
           import subprocess
+          import sys
+          import threading
           import time
           import requests
-          import os
-          import sys
 
-          if not os.path.exists("public_raw.txt"):
-              print("[!] Файл с конфигурациями пуст.", flush=True)
-              sys.exit(0)
+          TARGET_URL = os.environ.get("TARGET_SITE", "https://aistudio.google.com/prompts/new_chat")
+          MAX_WORKING_CONFIGS = 20
+          CONCURRENCY = 15  # Количество одновременных проверок
+          TIMEOUT = 7.0
 
-          # Читаем конфигурации без повреждения структуры строк
-          with open("public_raw.txt", "r", encoding="utf-8", errors="ignore") as f:
-              all_configs = [line.strip() for line in f if line.strip()]
+          SOURCES = [
+              os.environ.get("URL_5"),
+              os.environ.get("URL_6"),
+              os.environ.get("URL_7"),
+              os.environ.get("URL_8")
+          ]
 
-          # Удаляем дубликаты, сохраняя оригинальный порядок (базы РФ в приоритете)
-          seen = set()
-          unique_configs = []
-          for c in reversed(all_configs):
-              if c not in seen:
-                  seen.add(c)
-                  unique_configs.append(c)
+          PROTO_REGEX = re.compile(r'^(vless|vmess|trojan|ss|ssr|hysteria|hysteria2|hy2|wireguard)://', re.IGNORECASE)
 
-          print(f"[-] Всего уникальных строк для проверки: {len(unique_configs)}", flush=True)
+          def decode_if_base64(text):
+              try:
+                  decoded = base64.b64decode(text).decode('utf-8', errors='ignore')
+                  if any(PROTO_REGEX.match(line.strip()) for line in decoded.splitlines()):
+                      return decoded
+              except Exception:
+                  pass
+              return text
 
-          real_working = []
-          socks_port = 19999
-          TEST_URL = os.environ.get("TARGET_SITE", "https://aistudio.google.com/prompts/new_chat")
+          def fetch_configs():
+              configs = []
+              for url in SOURCES:
+                  if not url:
+                      continue
+                  try:
+                      resp = requests.get(url, timeout=10)
+                      if resp.status_code == 200:
+                          raw_content = decode_if_base64(resp.text.strip())
+                          for line in raw_content.splitlines():
+                              line = line.strip()
+                              if PROTO_REGEX.match(line):
+                                  configs.append(line)
+                  except Exception as e:
+                      print(f"[!] Ошибка при загрузке {url}: {e}", flush=True)
 
-          for idx, config in enumerate(unique_configs):
-              # Запуск прокси-сервера
-              proc = subprocess.Popen(
-                  ["./xray-knife", "proxy", "-c", config, "--port", str(socks_port)],
-                  stdout=subprocess.DEVNULL,
-                  stderr=subprocess.DEVNULL
-              )
-              
-              # Даем Reality-конфигам 2 секунды на полноценное открытие SOCKS5-порта
-              time.sleep(2.0)
+              # Дедупликация с сохранением порядка
+              seen = set()
+              unique = []
+              for c in configs:
+                  if c not in seen:
+                      seen.add(c)
+                      unique.append(c)
+              return unique
+
+          def wait_for_port(port, timeout=2.5):
+              start = time.time()
+              while time.time() - start < timeout:
+                  try:
+                      with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                          return True
+                  except (socket.timeout, ConnectionRefusedError, OSError):
+                      time.sleep(0.05)
+              return False
+
+          def start_proxy(config, port):
+              # Пробуем актуальные варианты синтаксиса xray-knife
+              cmd = ["./xray-knife", "proxy", "inbound", "-c", config, "--port", str(port)]
+              proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              if wait_for_port(port, timeout=1.5):
+                  return proc
+
+              # Запасной вариант для других версий
+              proc.terminate()
+              proc.wait()
+              cmd = ["./xray-knife", "proxy", "-c", config, "--port", str(port)]
+              proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+              if wait_for_port(port, timeout=1.5):
+                  return proc
+
+              proc.terminate()
+              proc.wait()
+              return None
+
+          working_configs = []
+          lock = threading.Lock()
+          stop_event = threading.Event()
+
+          def test_single_config(item):
+              idx, config, worker_id = item
+              if stop_event.is_set():
+                  return None
+
+              port = 20000 + worker_id
+              proc = start_proxy(config, port)
+              if not proc:
+                  return None
 
               proxies = {
-                  'http': f'socks5h://127.0.0.1:{socks_port}',
-                  'https': f'socks5h://127.0.0.1:{socks_port}'
+                  'http': f'socks5h://127.0.0.1:{port}',
+                  'https': f'socks5h://127.0.0.1:{port}'
               }
-
               headers = {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                  'Accept-Language': 'en-US,en;q=0.9'
               }
 
               is_valid = False
               try:
-                  # Полноценный запрос с увеличенным таймаутом и проходом по редиректам
-                  response = requests.get(TEST_URL, proxies=proxies, headers=headers, timeout=8.0, allow_redirects=True)
-                  
-                  final_url = response.url.lower()
-                  page_content = response.text.lower()
-                  
-                  if response.status_code == 200:
-                      # Строгий маркер геоблока: отсекаем редирект или текст об ограничении регионов
-                      if "available-regions" not in final_url and "available_regions" not in page_content and "not available" not in page_content:
-                          is_valid = True
-                          print(f"[+] Конфиг {idx+1}/{len(unique_configs)} РАБОТАЕТ для AI Studio!", flush=True)
-                      else:
-                          print(f"[-] Конфиг {idx+1}/{len(unique_configs)} отклонен: Геоблок Google.", flush=True)
-                  else:
-                      print(f"[-] Конфиг {idx+1}/{len(unique_configs)} отклонен: Статус {response.status_code}", flush=True)
-              except requests.exceptions.Timeout:
-                  print(f"[-] Конфиг {idx+1}/{len(unique_configs)} отклонен: Таймаут соединения.", flush=True)
-              except Exception as e:
-                  print(f"[-] Конфиг {idx+1}/{len(unique_configs)} отклонен: Ошибка сети ({type(e).__name__})", flush=True)
+                  resp = requests.get(
+                      TARGET_URL,
+                      proxies=proxies,
+                      headers=headers,
+                      timeout=TIMEOUT,
+                      allow_redirects=True
+                  )
 
-              # Гарантированно выключаем фоновый процесс xray-knife
-              proc.terminate()
-              proc.wait()
+                  final_url = resp.url.lower()
+                  page_text = resp.text.lower()
+
+                  # Проверяем успешность подключения и отсутствие геоблокировок Google
+                  if resp.status_code in [200, 302]:
+                      geoblocked = any(marker in final_url or marker in page_text for marker in [
+                          "available-regions",
+                          "available_regions",
+                          "not available in your country",
+                          "region is not supported"
+                      ])
+                      if not geoblocked:
+                          is_valid = True
+              except Exception:
+                  pass
+              finally:
+                  proc.terminate()
+                  try:
+                      proc.wait(timeout=1.0)
+                  except subprocess.TimeoutExpired:
+                      proc.kill()
 
               if is_valid:
-                  real_working.append(config)
-                  if len(real_working) >= 25: # Нам достаточно 25 лучших штук
-                      print("[!] Пул лучших конфигураций набран.", flush=True)
-                      break
+                  with lock:
+                      if len(working_configs) < MAX_WORKING_CONFIGS:
+                          working_configs.append(config)
+                          print(f"[+] [{len(working_configs)}/{MAX_WORKING_CONFIGS}] НАЙДЕН РАБОЧИЙ КОНФИГ (#{idx+1})", flush=True)
+                          if len(working_configs) >= MAX_WORKING_CONFIGS:
+                              stop_event.set()
+                  return config
+              return None
 
-          # Сохраняем результат
-          with open("best.txt", "w", encoding="utf-8") as f:
-              for conf in real_working:
-                  f.write(conf + "\n")
-                  
-          print(f"[#] Валидация завершена. Найдено рабочих прокси: {len(real_working)}", flush=True)
+          def main():
+              configs = fetch_configs()
+              print(f"[*] Собрано уникальных конфигураций: {len(configs)}", flush=True)
+              if not configs:
+                  print("[!] Конфигураций не найдено.")
+                  return
+
+              tasks = [(i, conf, i % CONCURRENCY) for i, conf in enumerate(configs)]
+
+              with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+                  futures = [executor.submit(test_single_config, task) for task in tasks]
+                  for future in concurrent.futures.as_completed(futures):
+                      if stop_event.is_set():
+                          break
+
+              print(f"\n[#] Валидация завершена. Отобрано гарантированно рабочих: {len(working_configs)}", flush=True)
+              with open("best.txt", "w", encoding="utf-8") as f:
+                  for conf in working_configs:
+                      f.write(conf + "\n")
+
+          if __name__ == "__main__":
+              main()
           EOF
-          python3 deep_validate.py
+          python3 validate.py
 
       - name: Base64 Encode Output
         run: |
           if [ -f best.txt ] && [ -s best.txt ]; then
             cat best.txt | base64 -w 0 > sub.txt
-            echo "[+] Файл sub.txt успешно обновлен."
+            echo "[+] sub.txt сформирован (найдено $(wc -l < best.txt) шт.)."
           else
-            echo "[!] Рабочих прокси для AI Studio в этих списках не найдено."
-            touch sub.txt
+            echo "[!] Рабочих прокси не найдено."
+            > sub.txt
           fi
           
       - name: Commit and Push
@@ -154,6 +235,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s sub.txt ]; then
             git add sub.txt
-            git commit -m "Update: $(date +'%Y-%m-%d %H:%M') [Live Output & Fixed URLs]" || echo "No changes"
+            git commit -m "Update working AI Studio proxies [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes to commit"
             git push
           fi
