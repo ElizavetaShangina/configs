@@ -22,175 +22,340 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
-        run: pip install requests urllib3
+      - name: Install Python Dependencies
+        run: pip install requests pysocks urllib3
 
-      - name: Install Xray-Knife (Native Go Engine)
+      - name: Install Official Xray-Core
         run: |
-          echo "[*] Загрузка Xray-knife..."
-          URL=$(curl -s https://api.github.com/repos/lilendian0x00/xray-knife/releases/latest | jq -r '.assets[] | select(.name == "Xray-knife-linux-64.zip") | .browser_download_url')
-          wget -qO xray-knife.zip "$URL"
-          unzip -o xray-knife.zip -d temp_xray
-          mv temp_xray/xray-knife ./xray-knife
-          chmod +x xray-knife
-          ./xray-knife version || true
+          echo "[*] Загрузка официального ядра Xray-core..."
+          wget -qO xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+          unzip -o xray.zip -d xray_bin
+          mv xray_bin/xray ./xray
+          chmod +x xray
+          echo "[+] Xray установлен:"
+          ./xray version
 
-      - name: Fetch 16 Mega-Sources & Extract Candidates
+      - name: Harvest, Deep-Validate & Build Subscriptions
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > fetch_all.py
+          cat << 'EOF' > full_pipeline.py
           import base64
+          import concurrent.futures
+          import datetime
+          import json
+          import os
           import random
           import re
+          import socket
+          import subprocess
+          import sys
+          import threading
+          import time
+          from urllib.parse import urlparse, parse_qs
           import requests
-          from urllib.parse import urlparse
+          import urllib3
 
-          # 16 крупнейших агрегаторов, обновляющихся каждые 5-30 минут
+          socket.setdefaulttimeout(5.0)
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+          AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
+          CONCURRENCY = 4 # Оптимально для 2 vCPU на раннере GitHub
+
+          # Источники с высоким содержанием VLESS Reality
           SOURCES = [
-              # Верифицированные потоки с реальным трафиком
               "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
               "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs_base64.txt",
-              "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt",
               "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/vless.txt",
-              "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/all_configs.txt",
-              "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/all.txt",
-              # SoliSpirit & Barry-Far
-              "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/all_configs.txt",
-              "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/vless.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub6.txt",
-              # Epodonios, Yebekhe, Mahdibland, MatinGhanbari
-              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/raw/main/All_Configs_Sub.txt",
               "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality",
-              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt",
-              "https://raw.githubusercontent.com/MustafaBaqer/VestraNet-Nodes/main/protocols/vless.txt",
-              "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/all_sub.txt"
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
+              "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/vless.txt",
+              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt",
+              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt"
           ]
 
-          PROTO_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
+          # Страны, заблокированные в Google AI Studio
+          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "KP", "CU", "SY"}
+
+          # Провайдеры, заблокированные ТСПУ в РФ или отдающие фейковый трафик
+          BLOCKED_ORGS = [
+              "cloudflare", "fastly", "cloudfront",
+              "irancell", "mci", "asiatech", "telecommunication company of iran",
+              "mcci", "mobile telecommunication", "afranet", "pars online"
+          ]
+
+          # Заведомо мертвые/глушимые в РФ SNI
+          BAD_SNIS = {"google.com", "speedtest.net", "cloudflare.com", "workers.dev"}
+          PROTO_REGEX = re.compile(r'(vless://[^\s\'"<>]+)', re.IGNORECASE)
 
           def decode_if_base64(text):
               try:
                   decoded = base64.b64decode(text.strip()).decode('utf-8', errors='ignore')
-                  if any(p in decoded for p in ["vless://", "vmess://", "trojan://", "ss://"]):
+                  if "vless://" in decoded:
                       return decoded
               except Exception:
                   pass
               return text
 
-          collected = set()
-          print("=" * 75, flush=True)
-          print("[*] СКАЧИВАНИЕ ИЗ 16 ГЛОБАЛЬНЫХ ИСТОЧНИКОВ", flush=True)
-          print("=" * 75, flush=True)
+          def is_dpi_survival_reality(link):
+              try:
+                  clean = link.split("#")[0].strip()
+                  if not clean.startswith("vless://") or "security=reality" not in clean.lower():
+                      return False
+                  
+                  p = urlparse(clean)
+                  if not p.hostname or not p.port or not p.username:
+                      return False
 
+                  host = p.hostname.lower()
+                  if host.endswith(".ir") or host.endswith(".cn") or host.endswith(".ru"):
+                      return False
+
+                  params = parse_qs(p.query)
+                  if not params.get("pbk"):
+                      return False
+
+                  sni = params.get("sni", [""])[0].lower()
+                  if any(bad in sni for bad in BAD_SNIS):
+                      return False
+
+                  return True
+              except Exception:
+                  return False
+
+          print("=" * 80)
+          print("[1/3] СБОР И ФИЛЬТРАЦИЯ КАНДИДАТОВ ПО КРИТЕРИЯМ ТСПУ РФ...")
+          print("=" * 80, flush=True)
+
+          collected_links = set()
           for url in SOURCES:
               try:
                   resp = requests.get(url, timeout=12)
                   if resp.status_code == 200:
-                      text = decode_if_base64(resp.text)
-                      matches = PROTO_REGEX.findall(text)
-                      count = 0
+                      content = decode_if_base64(resp.text)
+                      matches = PROTO_REGEX.findall(content)
+                      valid_cnt = 0
                       for m in matches:
                           m = m.strip()
-                          clean_base = m.split("#")[0].strip()
-                          if clean_base not in collected:
-                              collected.add(m)
-                              count += 1
-                      source_name = "/".join(url.split("/")[-3:])
-                      print(f"[+] {source_name}: извлечено {count} шт.", flush=True)
+                          if is_dpi_survival_reality(m):
+                              clean_base = m.split("#")[0].strip()
+                              if clean_base not in collected_links:
+                                  collected_links.add(m)
+                                  valid_cnt += 1
+                      source_name = "/".join(url.split("/")[-2:])
+                      print(f"[+] {source_name}: отобрано {valid_cnt} Reality-нод", flush=True)
               except Exception as e:
-                  print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
+                  print(f"[!] Ошибка {url}: {e}", flush=True)
 
-          unique_list = list(collected)
-          print(f"\n[*] Всего уникальных узлов для проверки: {len(unique_list)}", flush=True)
+          candidates = list(collected_links)
+          random.shuffle(candidates)
+          print(f"\n[*] Итого чистых кандидатов для стресс-теста: {len(candidates)}", flush=True)
 
-          # Перемешиваем кандидатов
-          random.shuffle(unique_list)
+          if not candidates:
+              print("[!] Нет кандидатов для проверки. Завершение.")
+              sys.exit(0)
 
-          # Берем большой срез до 1000 кандидатов на тест
-          with open("candidates.txt", "w", encoding="utf-8") as f:
-              for c in unique_list[:1000]:
-                  f.write(c + "\n")
-          EOF
-          python3 fetch_all.py
+          # Генератор Xray конфигурации
+          def build_xray_config(link, socks_port):
+              try:
+                  clean = link.split("#")[0].strip()
+                  p = urlparse(clean)
+                  params = parse_qs(p.query)
 
-      - name: Test ALL Candidates (NO LIMITS)
-        run: |
-          if [ -s candidates.txt ]; then
-            echo "================================================================================"
-            echo "[*] Запуск нативного тестирования всего пула без ограничений на количество..."
-            echo "================================================================================"
-            
-            # Проверяем все узлы без флага --max-passed (сохраняем ВСЁ что работает)
-            ./xray-knife http -f candidates.txt \
-              -t 35 \
-              --timeout 3000 \
-              --test-urls "https://www.google.com/generate_204" \
-              -o passed_raw.txt || true
-          fi
+                  user = {"id": p.username, "encryption": "none"}
+                  flow = params.get("flow", [""])[0]
+                  net = params.get("type", ["tcp"])[0]
 
-      - name: Format ALL Working Subscriptions
-        run: |
-          cat << 'EOF' > make_sub.py
-          import base64
-          import os
-          import re
-          import datetime
+                  if flow:
+                      user["flow"] = flow
+                  elif net == "tcp":
+                      user["flow"] = "xtls-rprx-vision"
 
-          PROTO_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
+                  reality_settings = {
+                      "show": False,
+                      "fingerprint": params.get("fp", ["chrome"])[0],
+                      "serverName": params.get("sni", [p.hostname])[0],
+                      "publicKey": params.get("pbk", [""])[0]
+                  }
+                  if params.get("sid", [""])[0]:
+                      reality_settings["shortId"] = params.get("sid")[0]
 
-          cleaned = []
-          seen_hosts = set()
+                  stream = {
+                      "network": net,
+                      "security": "reality",
+                      "realitySettings": reality_settings
+                  }
+                  if net == "grpc":
+                      srv = params.get("serviceName", [""])[0]
+                      if srv:
+                          stream["grpcSettings"] = {"serviceName": srv}
 
-          if os.path.exists("passed_raw.txt"):
-              with open("passed_raw.txt", "r", encoding="utf-8", errors="ignore") as f:
-                  for line in f:
-                      matches = PROTO_REGEX.findall(line)
-                      for m in matches:
-                          m = m.strip()
-                          clean_base = m.split("#")[0].strip()
-                          if clean_base not in seen_hosts:
-                              seen_hosts.add(clean_base)
-                              cleaned.append(m)
+                  return {
+                      "log": {"loglevel": "none"},
+                      "inbounds": [{
+                          "listen": "127.0.0.1",
+                          "port": socks_port,
+                          "protocol": "socks",
+                          "settings": {"auth": "noauth", "udp": True}
+                      }],
+                      "outbounds": [{
+                          "protocol": "vless",
+                          "settings": {
+                              "vnext": [{"address": p.hostname, "port": int(p.port), "users": [user]}]
+                          },
+                          "streamSettings": stream
+                      }]
+                  }
+              except Exception:
+                  return None
+
+          def wait_for_port(port, timeout=3.5):
+              t0 = time.time()
+              while time.time() - t0 < timeout:
+                  try:
+                      with socket.create_connection(("127.0.0.1", port), timeout=0.15):
+                          return True
+                  except Exception:
+                      time.sleep(0.04)
+              return False
+
+          verified_working = []
+          lock = threading.Lock()
+          tested_count = 0
+
+          print("\n" + "=" * 80)
+          print(f"[2/3] СКВОЗНОЕ ТЕСТИРОВАНИЕ XRAY ➔ TELEGRAM ➔ GOOGLE AI STUDIO...")
+          print("=" * 80, flush=True)
+
+          def test_node_worker(item):
+              global tested_count
+              idx, link, worker_id = item
+
+              port = 31000 + worker_id
+              cfg = build_xray_config(link, port)
+              if not cfg:
+                  return
+
+              cfg_file = f"xray_cfg_{worker_id}.json"
+              with open(cfg_file, "w") as f:
+                  json.dump(cfg, f)
+
+              proc = None
+              is_valid = False
+              info_str = ""
+
+              try:
+                  proc = subprocess.Popen(["./xray", "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  if not wait_for_port(port, timeout=3.0):
+                      return
+
+                  proxies = {
+                      "http": f"socks5h://127.0.0.1:{port}",
+                      "https": f"socks5h://127.0.0.1:{port}"
+                  }
+                  headers = {
+                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                      "Accept-Language": "en-US,en;q=0.9"
+                  }
+
+                  # 1. Проверка ASN и Геолокации
+                  try:
+                      ip_data = requests.get("http://ip-api.com/json/?fields=status,countryCode,isp,org,as,query", proxies=proxies, timeout=3.5).json()
+                      if ip_data.get("status") != "success":
+                          return
+
+                      country = ip_data.get("countryCode", "").upper()
+                      org_text = (ip_data.get("org", "") + " " + ip_data.get("isp", "") + " " + ip_data.get("as", "")).lower()
+
+                      if country in BLOCKED_COUNTRIES or any(bad in org_text for bad in BLOCKED_ORGS):
+                          return
+                      
+                      clean_org = ip_data.get("org") or ip_data.get("isp") or country
+                  except Exception:
+                      return
+
+                  # 2. Проверка полезной нагрузки Telegram API
+                  tg_res = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.0)
+                  if tg_res.status_code not in [200, 302, 404]:
+                      return
+
+                  # 3. Прямой строгий тест Google AI Studio (без геоблока)
+                  t0 = time.time()
+                  ai_res = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
+                  latency = int((time.time() - t0) * 1000)
+
+                  final_url = ai_res.url.lower()
+                  body = ai_res.text.lower()
+
+                  if ai_res.status_code in [200, 302]:
+                      if "available_regions" not in final_url and "available-regions" not in final_url and "not available in your country" not in body:
+                          is_valid = True
+                          p = urlparse(link.split("#")[0])
+                          info_str = f"Страна: {country} ({clean_org}) | Задержка AI Studio: {latency}ms | Узел: {p.hostname}:{p.port}"
+              except Exception:
+                  pass
+              finally:
+                  if proc:
+                      try:
+                          proc.kill()
+                          proc.wait(timeout=0.2)
+                      except Exception:
+                          pass
+                  if os.path.exists(cfg_file):
+                      try:
+                          os.remove(cfg_file)
+                      except Exception:
+                          pass
+
+              with lock:
+                  tested_count += 1
+                  if is_valid:
+                      verified_working.append(link)
+                      print(f"[🔥] [{len(verified_working):02d} НАЙДЕНО] {info_str}", flush=True)
+
+          # Берем первые 300 кандидатов для полного прогона
+          test_pool = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates[:300])]
+
+          with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+              list(executor.map(test_node_worker, test_pool))
 
           now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-          print("\n" + "=" * 75)
-          print(f"[ИТОГ] Найдено и сохранено РАБОЧИХ серверов (БЕЗ ОГРАНИЧЕНИЙ): {len(cleaned)}")
-          print(f"[ИТОГ] Время обновления: {now_str}")
-          print("=" * 75)
+          print("\n" + "=" * 80)
+          print(f"[3/3] ИТОГИ ВАЛИДАЦИИ:")
+          print(f"[*] Проверено кандидатов: {tested_count}")
+          print(f"[*] Найдено 100% РАБОЧИХ ДЛЯ AI STUDIO: {len(verified_working)}")
+          print(f"[*] Время обновления: {now_str}")
+          print("=" * 80, flush=True)
 
-          # Записываем все рабочие узлы
+          # Сохранение открытого списка
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              for c in cleaned:
+              f.write(f"# Last Updated: {now_str} | Working Servers: {len(verified_working)}\n")
+              for c in verified_working:
                   f.write(c + "\n")
 
-          # Сохраняем Base64 подписку
-          if cleaned:
-              b64_sub = base64.b64encode(("\n".join(cleaned) + "\n").encode('utf-8')).decode('utf-8')
+          # Сохранение Base64-подписки
+          if verified_working:
+              b64_sub = base64.b64encode(("\n".join(verified_working) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_sub)
               print("[+] sub.txt и clean_configs.txt успешно сгенерированы.")
           else:
               open("sub.txt", "w").close()
-              print("[!] Внимание: Рабочие узлы не обнаружены.")
+              print("[!] Внимание: В этом цикле не найдено подходящих узлов.")
           EOF
-          python3 make_sub.py
+          python3 -u full_pipeline.py
 
-      - name: Commit and Push (Guaranteed Sync)
+      - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git pull --rebase || true
           git add sub.txt clean_configs.txt
-          git commit -m "Auto-Update: $(date -u +'%Y-%m-%d %H:%M:%S UTC') [All Live Nodes]" || echo "No changes to commit"
+          git commit -m "Verified AI Studio Sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
           git push
 
       - name: Purge jsDelivr CDN Cache
         run: |
-          echo "[*] Сброс кэша CDN jsDelivr..."
           curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/sub.txt" || true
           curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/clean_configs.txt" || true
-          echo "[+] Запрос на сброс кэша отправлен."
