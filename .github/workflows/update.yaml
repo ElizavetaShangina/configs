@@ -2,7 +2,7 @@ name: Auto Update Sub
 
 on:
   schedule:
-    - cron: '0 */1 * * *' 
+    - cron: '0 */2 * * *' 
   workflow_dispatch: 
 
 permissions:
@@ -10,10 +10,12 @@ permissions:
 
 env:
   TARGET_SITE: "https://aistudio.google.com/prompts/new_chat"
-  URL_5: "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Sub6.txt"
-  URL_6: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt"
-  URL_7: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
-  URL_8: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt"
+  # Международные источники с VLESS Reality / Trojan / Shadowsocks
+  URL_1: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
+  URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt"
+  URL_3: "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/vl.txt"
+  URL_4: "https://raw.githubusercontent.com/sakha1370/OpenRay/refs/heads/main/output/all_valid_proxies.txt"
+  URL_5: "https://raw.githubusercontent.com/yitong2333/proxy-minging/refs/heads/main/v2ray.txt"
 
 jobs:
   update:
@@ -27,8 +29,8 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
-        run: pip install requests
+      - name: Install Python Dependencies
+        run: pip install requests pysocks urllib3
 
       - name: Install Xray-Knife
         run: |
@@ -38,135 +40,250 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Prepare and Decode Configs
+      - name: Fetch and Clean Raw Configs
         run: |
-          cat << 'EOF' > prepare.py
+          cat << 'EOF' > fetch.py
           import base64
           import os
           import re
           import requests
 
           SOURCES = [
-              os.environ.get("URL_5"),
-              os.environ.get("URL_6"),
-              os.environ.get("URL_7"),
-              os.environ.get("URL_8")
+              os.environ.get("URL_1"),
+              os.environ.get("URL_2"),
+              os.environ.get("URL_3"),
+              os.environ.get("URL_4"),
+              os.environ.get("URL_5")
           ]
 
-          PROTO_REGEX = re.compile(r'^(vless|vmess|trojan|ss|ssr|hysteria|hysteria2|hy2|wireguard|tuic)://', re.IGNORECASE)
+          # Только совместимые с V2Ray протоколы
+          PROTO_REGEX = re.compile(r'^(vless|vmess|trojan|ss)://[^\s\'"<>]+', re.IGNORECASE)
 
-          def extract_configs_from_text(raw_text):
-              extracted = []
-              # Пробуем декодировать Base64, если весь ответ закодирован
+          def decode_if_base64(text):
               try:
-                  decoded = base64.b64decode(raw_text.strip()).decode('utf-8', errors='ignore')
-                  for line in decoded.splitlines():
-                      line = line.strip()
-                      if PROTO_REGEX.match(line):
-                          extracted.append(line)
+                  decoded = base64.b64decode(text.strip()).decode('utf-8', errors='ignore')
+                  if any(PROTO_REGEX.match(line.strip()) for line in decoded.splitlines()):
+                      return decoded
               except Exception:
                   pass
-
-              # Читаем как обычный текст
-              for line in raw_text.splitlines():
-                  line = line.strip()
-                  if PROTO_REGEX.match(line):
-                      extracted.append(line)
-              return extracted
+              return text
 
           all_configs = []
           for url in SOURCES:
               if not url:
                   continue
               try:
-                  print(f"[*] Загрузка источника: {url}", flush=True)
-                  resp = requests.get(url, timeout=15)
+                  print(f"[*] Скачивание: {url}", flush=True)
+                  resp = requests.get(url, timeout=12)
                   if resp.status_code == 200:
-                      confs = extract_configs_from_text(resp.text)
-                      all_configs.extend(confs)
-                      print(f"[+] Получено строк: {len(confs)}", flush=True)
+                      content = decode_if_base64(resp.text)
+                      count = 0
+                      for line in content.splitlines():
+                          line = line.strip()
+                          if PROTO_REGEX.match(line):
+                              all_configs.append(line)
+                              count += 1
+                      print(f"[+] Извлечено конфигов: {count}", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
 
           # Дедупликация
-          unique_configs = []
+          unique = []
           seen = set()
           for c in all_configs:
               if c not in seen:
                   seen.add(c)
-                  unique_configs.append(c)
+                  unique.append(c)
 
-          print(f"[*] Всего уникальных конфигов для проверки: {len(unique_configs)}", flush=True)
-
-          with open("all_configs.txt", "w", encoding="utf-8") as f:
-              for c in unique_configs:
+          print(f"[+] Всего уникальных конфигураций для первичного скана: {len(unique)}", flush=True)
+          with open("raw_candidates.txt", "w", encoding="utf-8") as f:
+              for c in unique:
                   f.write(c + "\n")
           EOF
-          python3 prepare.py
+          python3 fetch.py
 
-      - name: Run High-Speed AI Studio Validation
+      - name: Stage 1 - Fast Prescan
         run: |
-          if [ -s all_configs.txt ]; then
-            echo "[*] Запуск тестирования через xray-knife..."
-            ./xray-knife http -f all_configs.txt \
-              -t 30 \
-              --test-urls "${{ env.TARGET_SITE }}" \
-              --max-passed 25 \
-              -o xray_out.txt || true
+          if [ -s raw_candidates.txt ]; then
+            echo "[*] Этап 1: Быстрый отсев неработающих узлов через xray-knife..."
+            # Проверяем базовый доступ к гуглу для отсева мертвых соединений
+            ./xray-knife http -f raw_candidates.txt \
+              -t 50 \
+              --test-urls "https://www.google.com/generate_204" \
+              -o prescan_alive.txt || true
           fi
 
-      - name: Sanitize and Filter for V2Ray / Xray
+      - name: Stage 2 - Strict AI Studio & GeoIP Validation
         run: |
-          cat << 'EOF' > format_sub.py
-          import re
+          cat << 'EOF' > deep_check.py
           import base64
+          import concurrent.futures
           import os
+          import re
+          import socket
+          import subprocess
+          import sys
+          import threading
+          import time
+          import requests
 
-          # Разрешаем только протоколы, нативно поддерживаемые v2ray/xray
+          AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
+          MAX_TARGET = 20
+          CONCURRENCY = 8
+          TIMEOUT = 8.0
+
+          # Страны, где Google AI Studio гарантированно заблокирован
+          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "CU", "KP", "SY", "VE"}
           ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
           URI_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
 
-          cleaned_configs = []
+          def load_candidates():
+              configs = []
+              # Собираем после первого этапа
+              for fname in ["prescan_alive.txt", "raw_candidates.txt"]:
+                  if os.path.exists(fname):
+                      with open(fname, "r", encoding="utf-8", errors="ignore") as f:
+                          for line in f:
+                              m = URI_REGEX.findall(line)
+                              for c in m:
+                                  c = c.strip()
+                                  if c.startswith(ALLOWED_SCHEMES) and c not in configs:
+                                      configs.append(c)
+              return configs
 
-          for filename in ["xray_out.txt", "best_raw.txt", "best.txt"]:
-              if os.path.exists(filename):
-                  with open(filename, "r", encoding="utf-8", errors="ignore") as f:
-                      for line in f:
-                          matches = URI_REGEX.findall(line)
-                          for match in matches:
-                              match = match.strip()
-                              if match.startswith(ALLOWED_SCHEMES) and match not in cleaned_configs:
-                                  cleaned_configs.append(match)
+          def wait_for_port(port, timeout=3.0):
+              start = time.time()
+              while time.time() - start < timeout:
+                  try:
+                      with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                          return True
+                  except (socket.timeout, ConnectionRefusedError, OSError):
+                      time.sleep(0.05)
+              return False
 
-          # Ограничиваем первыми 20 рабочими
-          final_configs = cleaned_configs[:20]
+          def start_proxy(config, port):
+              # Запуск инстанса прокси через xray-knife
+              for cmd in [
+                  ["./xray-knife", "proxy", "inbound", "-c", config, "--port", str(port)],
+                  ["./xray-knife", "proxy", "-c", config, "--port", str(port)]
+              ]:
+                  try:
+                      proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                      if wait_for_port(port, timeout=2.0):
+                          return proc
+                      proc.terminate()
+                      proc.wait()
+                  except Exception:
+                      pass
+              return None
 
-          print(f"[+] Отфильтровано чистых v2ray/xray конфигураций: {len(final_configs)}")
+          working_configs = []
+          lock = threading.Lock()
+          stop_event = threading.Event()
 
-          # Сохраняем в открытом виде
-          with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              for c in final_configs:
-                  f.write(c + "\n")
+          def verify_config(item):
+              idx, config, worker_id = item
+              if stop_event.is_set():
+                  return
 
-          # Сохраняем Base64 подписку
-          if final_configs:
-              joined_text = "\n".join(final_configs) + "\n"
-              b64_sub = base64.b64encode(joined_text.encode('utf-8')).decode('utf-8')
-              with open("sub.txt", "w", encoding="utf-8") as f:
-                  f.write(b64_sub)
-              print("[+] sub.txt успешно сформирован в Base64.")
-          else:
-              open("sub.txt", "w").close()
-              print("[!] Рабочих конфигураций нужных протоколов не найдено.")
+              port = 25000 + worker_id
+              proc = start_proxy(config, port)
+              if not proc:
+                  return
+
+              proxies = {
+                  'http': f'socks5h://127.0.0.1:{port}',
+                  'https': f'socks5h://127.0.0.1:{port}'
+              }
+              headers = {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+                  'Accept-Language': 'en-US,en;q=0.9'
+              }
+
+              passed = False
+              country_code = "UNKNOWN"
+
+              try:
+                  # 1. Проверка GeoIP (отсекаем РФ и санкционные регионы)
+                  try:
+                      geo_resp = requests.get("https://api.country.is", proxies=proxies, timeout=5.0)
+                      if geo_resp.status_code == 200:
+                          country_code = geo_resp.json().get("country", "").upper()
+                          if country_code in BLOCKED_COUNTRIES:
+                              return
+                  except Exception:
+                      pass
+
+                  # 2. Строгий запрос к Google AI Studio
+                  resp = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=TIMEOUT, allow_redirects=True)
+                  final_url = resp.url.lower()
+                  body = resp.text.lower()
+
+                  # Проверяем, что нет редиректа на страницу блокировки регионов
+                  if resp.status_code in [200, 302]:
+                      is_geoblocked = (
+                          "available_regions" in final_url or
+                          "available-regions" in final_url or
+                          "not available in your country" in body or
+                          "region is not supported" in body or
+                          "restricted" in body and "google ai studio" in body
+                      )
+                      if not is_geoblocked:
+                          # 3. Дополнительная проверка API бэкенда Gemini
+                          api_check = requests.get("https://generativelanguage.googleapis.com", proxies=proxies, timeout=4.0)
+                          if api_check.status_code in [200, 404]: # 404 без параметров - нормальный ответ этого эндпоинта
+                              passed = True
+              except Exception:
+                  pass
+              finally:
+                  proc.terminate()
+                  try:
+                      proc.wait(timeout=1.0)
+                  except Exception:
+                      proc.kill()
+
+              if passed:
+                  with lock:
+                      if len(working_configs) < MAX_TARGET:
+                          working_configs.append(config)
+                          print(f"[+] [{len(working_configs)}/{MAX_TARGET}] НАЙДЕН РАБОЧИЙ AI STUDIO КОНФИГ! (Страна: {country_code})", flush=True)
+                          if len(working_configs) >= MAX_TARGET:
+                              stop_event.set()
+
+          def main():
+              candidates = load_candidates()
+              print(f"[*] Кандидатов на глубокую проверку: {len(candidates)}", flush=True)
+              tasks = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]
+
+              with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+                  futures = [executor.submit(verify_config, t) for t in tasks]
+                  for f in concurrent.futures.as_completed(futures):
+                      if stop_event.is_set():
+                          break
+
+              print(f"\n[#] Валидация завершена! Найдено 100% рабочих для AI Studio: {len(working_configs)}")
+              with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
+                  for c in working_configs:
+                      f.write(c + "\n")
+
+              if working_configs:
+                  b64_sub = base64.b64encode(("\n".join(working_configs) + "\n").encode('utf-8')).decode('utf-8')
+                  with open("sub.txt", "w", encoding="utf-8") as f:
+                      f.write(b64_sub)
+              else:
+                  open("sub.txt", "w").close()
+
+          if __name__ == "__main__":
+              main()
           EOF
-          python3 format_sub.py
+          python3 deep_check.py
 
       - name: Commit and Push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          if [ -s sub.txt ]; then
+          if [ -s clean_configs.txt ]; then
             git add sub.txt clean_configs.txt
-            git commit -m "Update valid V2Ray/Xray configs: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
+            git commit -m "Update guaranteed working AI Studio configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
             git push
           fi
