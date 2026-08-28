@@ -10,10 +10,6 @@ permissions:
 
 env:
   TARGET_SITE: "https://aistudio.google.com/prompts/new_chat"
-  URL_1: "https://raw.githubusercontent.com/barry-far/V2ray-config/main/All_Configs_Sub.txt"
-  URL_2: "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/1.txt"
-  URL_3: "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/6.txt"
-  URL_4: "https://github.com/AvenCores/goida-vpn-configs/raw/refs/heads/main/githubmirror/25.txt"
   URL_5: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
   URL_6: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt"
   URL_7: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
@@ -37,10 +33,6 @@ jobs:
       - name: Download Configs from Sources
         run: |
           touch public_raw.txt
-          wget -qO- "$URL_1" >> public_raw.txt
-          wget -qO- "$URL_2" >> public_raw.txt
-          wget -qO- "$URL_3" >> public_raw.txt
-          wget -qO- "$URL_4" >> public_raw.txt
           wget -qO- "$URL_5" >> public_raw.txt
           wget -qO- "$URL_6" >> public_raw.txt
           wget -qO- "$URL_7" >> public_raw.txt
