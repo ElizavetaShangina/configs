@@ -199,3 +199,10 @@ jobs:
             git commit -m "Update RKN-Bypass configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
             git push
           fi
+          
+      - name: Purge jsDelivr CDN Cache
+        run: |
+          echo "[*] Принудительный сброс кэша CDN..."
+          curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/sub.txt" || true
+          curl -s "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/clean_configs.txt" || true
+          echo "[+] Кэш CDN успешно сброшен."
