@@ -8,16 +8,6 @@ on:
 permissions:
   contents: write
 
-env:
-  TARGET_SITE: "https://www.google.com/generate_204"
-  # Свежие, регулярно валидируемые репозитории с VLESS Reality / Trojan / SS
-  URL_1: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt"
-  URL_2: "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/All_Configs_Sub.txt"
-  URL_3: "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/all_configs.txt"
-  URL_4: "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/proxy_collect_only_new_for_mirror.txt"
-  URL_5: "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/all.txt"
-  URL_6: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
-
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -30,7 +20,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
         run: pip install requests
 
       - name: Install Xray-Knife
@@ -41,126 +31,148 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Collect Fresh Candidates
+      - name: Collect ONLY VLESS Reality Configs
         run: |
-          cat << 'EOF' > fetch.py
+          cat << 'EOF' > get_reality.py
           import base64
           import os
           import re
           import requests
+          from urllib.parse import urlparse, parse_qs, unquote
 
+          # Источники с чистым VLESS Reality
           SOURCES = [
-              os.environ.get("URL_1"),
-              os.environ.get("URL_2"),
-              os.environ.get("URL_3"),
-              os.environ.get("URL_4"),
-              os.environ.get("URL_5"),
-              os.environ.get("URL_6")
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
+              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt",
+              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt",
+              "https://raw.githubusercontent.com/Leon406/SubFinder/main/sub/share/vless"
           ]
 
-          PROTO_REGEX = re.compile(r'^(vless|vmess|trojan|ss)://[^\s\'"<>]+', re.IGNORECASE)
+          # Заблокированные/мусорные SNI, которые глушит ТСПУ в РФ
+          BLOCKED_SNIS = {
+              "yahoo.com", "speedtest.net", "cloudflare.com", "workers.dev",
+              "frontdoor.microsoft.com", "cdn.cloudflare.net"
+          }
 
           def decode_if_base64(text):
               try:
                   decoded = base64.b64decode(text.strip()).decode('utf-8', errors='ignore')
-                  if any(PROTO_REGEX.match(line.strip()) for line in decoded.splitlines()):
+                  if "vless://" in decoded or "vmess://" in decoded:
                       return decoded
               except Exception:
                   pass
               return text
 
-          all_configs = []
-          for url in SOURCES:
-              if not url:
-                  continue
+          def is_good_reality(link):
+              if not link.startswith("vless://"):
+                  return False
+              link_lower = link.lower()
+              # Обязательно наличие Reality
+              if "security=reality" not in link_lower:
+                  return False
+              
+              # Парсим параметры для проверки SNI и ключа
               try:
-                  print(f"[*] Загрузка источника: {url}", flush=True)
+                  parsed = urlparse(link)
+                  params = parse_qs(parsed.query)
+                  sni = params.get("sni", [""])[0].lower()
+                  pbk = params.get("pbk", [""])[0]
+                  
+                  # Без публичного ключа Reality не работает
+                  if not pbk:
+                      return False
+                  # Исключаем заведомо заблокированные в РФ маскировки
+                  if sni in BLOCKED_SNIS:
+                      return False
+              except Exception:
+                  return False
+              
+              return True
+
+          all_reality = []
+          for url in SOURCES:
+              try:
+                  print(f"[*] Загрузка: {url}", flush=True)
                   resp = requests.get(url, timeout=12)
                   if resp.status_code == 200:
                       content = decode_if_base64(resp.text)
                       count = 0
                       for line in content.splitlines():
                           line = line.strip()
-                          if PROTO_REGEX.match(line):
-                              all_configs.append(line)
+                          if is_good_reality(line):
+                              all_reality.append(line)
                               count += 1
-                      print(f"[+] Успешно извлечено: {count} шт.", flush=True)
+                      print(f"[+] Найдено валидных VLESS Reality: {count} шт.", flush=True)
               except Exception as e:
-                  print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
+                  print(f"[!] Ошибка: {e}", flush=True)
 
-          # Дедупликация с сохранением порядка (свежие базы в начале)
+          # Дедупликация
           unique = []
           seen = set()
-          for c in all_configs:
-              if c not in seen:
-                  seen.add(c)
+          for c in all_reality:
+              # Нормализуем строку без комментария #хэштег для точного удаления дублей
+              base_part = c.split("#")[0]
+              if base_part not in seen:
+                  seen.add(base_part)
                   unique.append(c)
 
-          # Берем до 1500 самых свежих серверов для быстрого теста
-          selected = unique[:1500]
-          print(f"\n[*] Отобрано свежих кандидатов для теста: {len(selected)} (из {len(unique)})", flush=True)
-
-          with open("candidates.txt", "w", encoding="utf-8") as f:
-              for c in selected:
+          print(f"\n[*] Итого уникальных Reality-конфигов: {len(unique)}", flush=True)
+          with open("reality_candidates.txt", "w", encoding="utf-8") as f:
+              for c in unique[:1200]:
                   f.write(c + "\n")
           EOF
-          python3 fetch.py
+          python3 get_reality.py
 
-      - name: High-Speed Native Google Validation
+      - name: Test Against Google Connectivity
         run: |
-          if [ -s candidates.txt ]; then
+          if [ -s reality_candidates.txt ]; then
             echo "================================================================================"
-            echo "[*] Тестирование серверов против Google через xray-knife (цель: 20 рабочих)..."
+            echo "[*] Тестирование VLESS Reality серверов через xray-knife..."
             echo "================================================================================"
             
-            ./xray-knife http -f candidates.txt \
+            ./xray-knife http -f reality_candidates.txt \
               -t 35 \
-              --timeout 3500 \
-              --test-urls "${{ env.TARGET_SITE }}" \
+              --timeout 3000 \
+              --test-urls "https://www.google.com/generate_204" \
               --max-passed 20 \
-              -o xray_out.txt || true
+              -o live_reality.txt || true
           fi
 
-      - name: Format Clean Subscription for V2Ray
+      - name: Build Clean Subscriptions
         run: |
-          cat << 'EOF' > make_sub.py
+          cat << 'EOF' > format_out.py
           import base64
           import os
           import re
 
-          ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
-          URI_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
-
           cleaned = []
-          if os.path.exists("xray_out.txt"):
-              with open("xray_out.txt", "r", encoding="utf-8", errors="ignore") as f:
+          if os.path.exists("live_reality.txt"):
+              with open("live_reality.txt", "r", encoding="utf-8", errors="ignore") as f:
                   for line in f:
-                      matches = URI_REGEX.findall(line)
+                      matches = re.findall(r'(vless://[^\s\'"<>]+)', line, re.IGNORECASE)
                       for m in matches:
                           m = m.strip()
-                          if m.startswith(ALLOWED_SCHEMES) and m not in cleaned:
+                          if "security=reality" in m.lower() and m not in cleaned:
                               cleaned.append(m)
 
+          # Берем 20 лучших
           final_configs = cleaned[:20]
 
-          print(f"\n================================================================================")
-          print(f"[ИТОГ] Сформирован пул из {len(final_configs)} рабочих конфигураций Google!")
-          print(f"================================================================================")
+          print(f"\n[+] Успешно отобрано {len(final_configs)} рабочих VLESS Reality конфигураций.")
 
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
               for c in final_configs:
                   f.write(c + "\n")
 
           if final_configs:
-              b64_sub = base64.b64encode(("\n".join(final_configs) + "\n").encode('utf-8')).decode('utf-8')
+              b64_data = base64.b64encode(("\n".join(final_configs) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
-                  f.write(b64_sub)
-              print("[+] sub.txt (Base64) и clean_configs.txt обновлены.")
+                  f.write(b64_data)
           else:
               open("sub.txt", "w").close()
-              print("[!] Рабочих конфигураций не обнаружено.")
           EOF
-          python3 make_sub.py
+          python3 format_out.py
 
       - name: Commit and Push
         run: |
@@ -168,6 +180,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s clean_configs.txt ]; then
             git add sub.txt clean_configs.txt
-            git commit -m "Update working Google proxies [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
+            git commit -m "Update VLESS Reality configs: $(date +'%Y-%m-%d %H:%M')" || echo "No changes"
             git push
           fi
