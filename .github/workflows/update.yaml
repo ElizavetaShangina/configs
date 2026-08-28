@@ -9,13 +9,14 @@ permissions:
   contents: write
 
 env:
-  TARGET_SITE: "https://generativelanguage.googleapis.com"
-  # Проверенные международные источники (без белых списков РФ)
-  URL_1: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
-  URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt"
-  URL_3: "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/vl.txt"
-  URL_4: "https://raw.githubusercontent.com/sakha1370/OpenRay/refs/heads/main/output/all_valid_proxies.txt"
-  URL_5: "https://raw.githubusercontent.com/yitong2333/proxy-minging/refs/heads/main/v2ray.txt"
+  TARGET_SITE: "https://www.google.com/generate_204"
+  # Свежие, регулярно валидируемые репозитории с VLESS Reality / Trojan / SS
+  URL_1: "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt"
+  URL_2: "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/All_Configs_Sub.txt"
+  URL_3: "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/all_configs.txt"
+  URL_4: "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/proxy_collect_only_new_for_mirror.txt"
+  URL_5: "https://raw.githubusercontent.com/MahanKenway/Freedom-V2Ray/main/all.txt"
+  URL_6: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
 
 jobs:
   update:
@@ -29,7 +30,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Python Dependencies
+      - name: Install Dependencies
         run: pip install requests
 
       - name: Install Xray-Knife
@@ -40,7 +41,7 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Fetch and Prepare Candidates
+      - name: Collect Fresh Candidates
         run: |
           cat << 'EOF' > fetch.py
           import base64
@@ -53,10 +54,10 @@ jobs:
               os.environ.get("URL_2"),
               os.environ.get("URL_3"),
               os.environ.get("URL_4"),
-              os.environ.get("URL_5")
+              os.environ.get("URL_5"),
+              os.environ.get("URL_6")
           ]
 
-          # Только поддерживаемые V2Ray клиентами схемы
           PROTO_REGEX = re.compile(r'^(vless|vmess|trojan|ss)://[^\s\'"<>]+', re.IGNORECASE)
 
           def decode_if_base64(text):
@@ -83,11 +84,11 @@ jobs:
                           if PROTO_REGEX.match(line):
                               all_configs.append(line)
                               count += 1
-                      print(f"[+] Извлечено: {count} шт.", flush=True)
+                      print(f"[+] Успешно извлечено: {count} шт.", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
 
-          # Дедупликация
+          # Дедупликация с сохранением порядка (свежие базы в начале)
           unique = []
           seen = set()
           for c in all_configs:
@@ -95,24 +96,26 @@ jobs:
                   seen.add(c)
                   unique.append(c)
 
-          print(f"[*] Всего уникальных конфигов для теста: {len(unique)}", flush=True)
+          # Берем до 1500 самых свежих серверов для быстрого теста
+          selected = unique[:1500]
+          print(f"\n[*] Отобрано свежих кандидатов для теста: {len(selected)} (из {len(unique)})", flush=True)
+
           with open("candidates.txt", "w", encoding="utf-8") as f:
-              for c in unique:
+              for c in selected:
                   f.write(c + "\n")
           EOF
           python3 fetch.py
 
-      - name: High-Speed AI Studio Native Validation
+      - name: High-Speed Native Google Validation
         run: |
           if [ -s candidates.txt ]; then
             echo "================================================================================"
-            echo "[*] Запуск нативного тестирования Google AI Studio / Gemini API через xray-knife"
+            echo "[*] Тестирование серверов против Google через xray-knife (цель: 20 рабочих)..."
             echo "================================================================================"
             
-            # Проверяем напрямую целевой API Google AI Studio с лимитом на 20 успешных
             ./xray-knife http -f candidates.txt \
-              -t 40 \
-              --timeout 4500 \
+              -t 35 \
+              --timeout 3500 \
               --test-urls "${{ env.TARGET_SITE }}" \
               --max-passed 20 \
               -o xray_out.txt || true
@@ -138,11 +141,10 @@ jobs:
                           if m.startswith(ALLOWED_SCHEMES) and m not in cleaned:
                               cleaned.append(m)
 
-          # Ограничиваем первыми 20
           final_configs = cleaned[:20]
 
           print(f"\n================================================================================")
-          print(f"[ИТОГ] Отобрано {len(final_configs)} гарантированно рабочих конфигураций для Google AI Studio!")
+          print(f"[ИТОГ] Сформирован пул из {len(final_configs)} рабочих конфигураций Google!")
           print(f"================================================================================")
 
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
@@ -153,7 +155,7 @@ jobs:
               b64_sub = base64.b64encode(("\n".join(final_configs) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_sub)
-              print("[+] sub.txt (Base64) и clean_configs.txt успешно созданы.")
+              print("[+] sub.txt (Base64) и clean_configs.txt обновлены.")
           else:
               open("sub.txt", "w").close()
               print("[!] Рабочих конфигураций не обнаружено.")
@@ -166,6 +168,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s clean_configs.txt ]; then
             git add sub.txt clean_configs.txt
-            git commit -m "Update live Google AI Studio configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
+            git commit -m "Update working Google proxies [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
             git push
           fi
