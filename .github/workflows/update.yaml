@@ -27,14 +27,14 @@ jobs:
 
       - name: Install Official Xray-Core
         run: |
-          echo "[*] Загрузка Xray-core..."
+          echo "[*] Установка Xray-core..."
           wget -qO xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
           unzip -o xray.zip -d xray_bin
           mv xray_bin/xray ./xray
           chmod +x xray
           ./xray version
 
-      - name: Fetch, Validate & Build Subscriptions
+      - name: Fetch, MTProto-Validate & Build Subscriptions
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -52,6 +52,7 @@ jobs:
           import threading
           import time
           from urllib.parse import urlparse, parse_qs
+          import socks
           import requests
           import urllib3
 
@@ -61,7 +62,7 @@ jobs:
           AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
           CONCURRENCY = 4
 
-          # Источники от Игорька (igareck) и Барри (barry-far)
+          # Базы от igareck и barry-far + топ-проверенные
           SOURCES = [
               # igareck
               "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
@@ -73,10 +74,21 @@ jobs:
               "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
               "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub6.txt",
               "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub7.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub8.txt"
+              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub8.txt",
+              # Top Verified Feeds
+              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
+              "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality"
           ]
 
           PROTO_REGEX = re.compile(r'((?:vless|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
+
+          # IP-адреса официальных дата-центров Telegram (куда подключаются клиенты Telegram Desktop и Mobile)
+          TELEGRAM_DCS = [
+              ("149.154.167.50", 443),  # DC2 (Европа / РФ основной)
+              ("91.108.56.130", 443),   # DC5 (Азия)
+              ("149.154.175.50", 443),  # DC1 (США)
+              ("149.154.167.91", 443)   # DC4 (Европа резервный)
+          ]
 
           def decode_if_base64(text):
               try:
@@ -88,7 +100,7 @@ jobs:
               return text
 
           print("=" * 80)
-          print("[1/3] СКАЧИВАНИЕ БАЗ IGACK & BARRY-FAR...")
+          print("[1/3] СКАЧИВАНИЕ И ПОДГОТОВКА СЕРВЕРОВ...")
           print("=" * 80, flush=True)
 
           collected_nodes = set()
@@ -112,7 +124,7 @@ jobs:
 
           candidates = list(collected_nodes)
           random.shuffle(candidates)
-          print(f"\n[*] Всего уникальных кандидатов для тестирования: {len(candidates)}", flush=True)
+          print(f"\n[*] Итого уникальных серверов для теста: {len(candidates)}", flush=True)
 
           if not candidates:
               print("[!] Нет кандидатов.")
@@ -202,12 +214,32 @@ jobs:
                       time.sleep(0.04)
               return False
 
+          def test_telegram_native_dc(socks_port):
+              """Тестирует прямое MTProto TCP-соединение с реальными дата-центрами Telegram."""
+              for dc_ip, dc_port in TELEGRAM_DCS:
+                  s = socks.socksocket()
+                  s.set_proxy(socks.SOCKS5, "127.0.0.1", socks_port)
+                  s.settimeout(3.5)
+                  try:
+                      s.connect((dc_ip, dc_port))
+                      s.send(b"\xef")  # Инициализация MTProto
+                      s.close()
+                      return True, dc_ip
+                  except Exception:
+                      pass
+                  finally:
+                      try:
+                          s.close()
+                      except Exception:
+                          pass
+              return False, None
+
           verified_nodes = []
           lock = threading.Lock()
           tested_count = 0
 
           print("\n" + "=" * 80)
-          print("[2/3] ТЕСТИРОВАНИЕ XRAY ➔ TELEGRAM ➔ GOOGLE AI STUDIO...")
+          print("[2/3] СКВОЗНОЙ MTPROTO ТЕСТ TELEGRAM DC + GOOGLE AI STUDIO...")
           print("=" * 80, flush=True)
 
           def test_worker(item):
@@ -232,6 +264,11 @@ jobs:
                   if not wait_for_port(port, timeout=3.0):
                       return
 
+                  # 1. АППАРАТНЫЙ ТЕСТ TELEGRAM MTPROTO DC (ПРЯМОЙ TCP К ДАТА-ЦЕНТРАМ)
+                  tg_ok, dc_used = test_telegram_native_dc(port)
+                  if not tg_ok:
+                      return
+
                   proxies = {
                       "http": f"socks5h://127.0.0.1:{port}",
                       "https": f"socks5h://127.0.0.1:{port}"
@@ -241,12 +278,12 @@ jobs:
                       "Accept-Language": "en-US,en;q=0.9"
                   }
 
-                  # 1. Проверка Telegram (полезная нагрузка)
-                  tg_res = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.0)
-                  if tg_res.status_code not in [200, 302, 404]:
+                  # 2. ТЕСТ WEB TELEGRAM
+                  tme_res = requests.get("https://t.me", proxies=proxies, timeout=3.5)
+                  if tme_res.status_code != 200:
                       return
 
-                  # 2. Проверка Google AI Studio (без геоблока)
+                  # 3. ТЕСТ GOOGLE AI STUDIO
                   t0 = time.time()
                   ai_res = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
                   latency = int((time.time() - t0) * 1000)
@@ -259,7 +296,7 @@ jobs:
                           is_valid = True
                           p = urlparse(link.split("#")[0])
                           remark = link.split("#")[-1] if "#" in link else f"{p.hostname}:{p.port}"
-                          info_str = f"Пинг AI Studio: {latency}ms | Узел: {remark}"
+                          info_str = f"Telegram DC: {dc_used} [OK] | AI Studio: {latency}ms [OK] | Узел: {remark}"
               except Exception:
                   pass
               finally:
@@ -279,10 +316,10 @@ jobs:
                   tested_count += 1
                   if is_valid:
                       verified_nodes.append(link)
-                      print(f"[🔥] [{len(verified_nodes):02d} НАЙДЕНО] {info_str}", flush=True)
+                      print(f"[🔥] [{len(verified_nodes):02d} РАБОТАЕТ] {info_str}", flush=True)
 
-          # Берем первые 250 кандидатов
-          test_pool = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates[:250])]
+          # Берем первые 300 кандидатов для тестирования
+          test_pool = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates[:300])]
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
               list(executor.map(test_worker, test_pool))
@@ -290,11 +327,11 @@ jobs:
           now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
           print("\n" + "=" * 80)
-          print(f"[3/3] ИТОГИ: Проверено {tested_count}, Найдено рабочих: {len(verified_nodes)}")
+          print(f"[3/3] ИТОГИ: Проверено {tested_count}, Найдено реально работающих: {len(verified_nodes)}")
           print("=" * 80, flush=True)
 
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              f.write(f"# Last Updated: {now_str} | Working: {len(verified_nodes)}\n")
+              f.write(f"# Last Updated: {now_str} | Fully Working TG + AI: {len(verified_nodes)}\n")
               for c in verified_nodes:
                   f.write(c + "\n")
 
@@ -302,10 +339,10 @@ jobs:
               b64_sub = base64.b64encode(("\n".join(verified_nodes) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_sub)
-              print("[+] sub.txt и clean_configs.txt успешно записаны.")
+              print("[+] sub.txt и clean_configs.txt успешно сгенерированы.")
           else:
               open("sub.txt", "w").close()
-              print("[!] В этом цикле рабочие узлы не обнаружены.")
+              print("[!] В этом цикле узлов с поддержкой MTProto и AI Studio не найдено.")
           EOF
           python3 -u run_validator.py
 
@@ -315,7 +352,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git pull --rebase || true
           git add sub.txt clean_configs.txt
-          git commit -m "Update igareck & barry-far sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
+          git commit -m "Update verified TG MTProto & AI Studio sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
           git push
 
       - name: Publish Instant-Release (Zero-Cache & Unblocked)
@@ -327,6 +364,6 @@ jobs:
           git push origin latest -f || true
           gh release delete latest -y || true
           gh release create latest sub.txt clean_configs.txt \
-            --title "Latest igareck & barry-far Verified Nodes" \
+            --title "Latest Verified TG MTProto & AI Studio Nodes" \
             --notes "Автоматическое обновление: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           echo "[+] Релиз обновлен."
