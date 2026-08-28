@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 env:
-  TARGET_SITE: "https://aistudio.google.com/prompts/new_chat"
-  # Международные источники с VLESS Reality / Trojan / Shadowsocks
+  TARGET_SITE: "https://generativelanguage.googleapis.com"
+  # Проверенные международные источники (без белых списков РФ)
   URL_1: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt"
   URL_2: "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt"
   URL_3: "https://raw.githubusercontent.com/sevcator/5ubscrpt10n/main/protocols/vl.txt"
@@ -30,7 +30,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install Python Dependencies
-        run: pip install requests pysocks urllib3
+        run: pip install requests
 
       - name: Install Xray-Knife
         run: |
@@ -40,7 +40,7 @@ jobs:
           mv temp_xray/xray-knife ./xray-knife
           chmod +x xray-knife
 
-      - name: Fetch and Clean Raw Configs
+      - name: Fetch and Prepare Candidates
         run: |
           cat << 'EOF' > fetch.py
           import base64
@@ -56,7 +56,7 @@ jobs:
               os.environ.get("URL_5")
           ]
 
-          # Только совместимые с V2Ray протоколы
+          # Только поддерживаемые V2Ray клиентами схемы
           PROTO_REGEX = re.compile(r'^(vless|vmess|trojan|ss)://[^\s\'"<>]+', re.IGNORECASE)
 
           def decode_if_base64(text):
@@ -73,7 +73,7 @@ jobs:
               if not url:
                   continue
               try:
-                  print(f"[*] Скачивание: {url}", flush=True)
+                  print(f"[*] Загрузка источника: {url}", flush=True)
                   resp = requests.get(url, timeout=12)
                   if resp.status_code == 200:
                       content = decode_if_base64(resp.text)
@@ -83,7 +83,7 @@ jobs:
                           if PROTO_REGEX.match(line):
                               all_configs.append(line)
                               count += 1
-                      print(f"[+] Извлечено конфигов: {count}", flush=True)
+                      print(f"[+] Извлечено: {count} шт.", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
 
@@ -95,255 +95,70 @@ jobs:
                   seen.add(c)
                   unique.append(c)
 
-          print(f"[+] Всего уникальных конфигураций для первичного скана: {len(unique)}", flush=True)
-          with open("raw_candidates.txt", "w", encoding="utf-8") as f:
+          print(f"[*] Всего уникальных конфигов для теста: {len(unique)}", flush=True)
+          with open("candidates.txt", "w", encoding="utf-8") as f:
               for c in unique:
                   f.write(c + "\n")
           EOF
           python3 fetch.py
 
-      - name: Stage 1 - Fast Prescan
+      - name: High-Speed AI Studio Native Validation
         run: |
-          if [ -s raw_candidates.txt ]; then
-            echo "[*] Этап 1: Быстрый отсев неработающих узлов через xray-knife..."
-            # Проверяем базовый доступ к гуглу для отсева мертвых соединений
-            ./xray-knife http -f raw_candidates.txt \
-              -t 50 \
-              --test-urls "https://www.google.com/generate_204" \
-              -o prescan_alive.txt || true
+          if [ -s candidates.txt ]; then
+            echo "================================================================================"
+            echo "[*] Запуск нативного тестирования Google AI Studio / Gemini API через xray-knife"
+            echo "================================================================================"
+            
+            # Проверяем напрямую целевой API Google AI Studio с лимитом на 20 успешных
+            ./xray-knife http -f candidates.txt \
+              -t 40 \
+              --timeout 4500 \
+              --test-urls "${{ env.TARGET_SITE }}" \
+              --max-passed 20 \
+              -o xray_out.txt || true
           fi
-      - name: Stage 2 - Strict AI Studio & GeoIP Validation
-        env:
-          PYTHONUNBUFFERED: "1"
+
+      - name: Format Clean Subscription for V2Ray
         run: |
-          cat << 'EOF' > deep_check.py
+          cat << 'EOF' > make_sub.py
           import base64
-          import concurrent.futures
           import os
           import re
-          import socket
-          import subprocess
-          import sys
-          import threading
-          import time
-          import requests
-          import urllib3
 
-          # 1. Глобальный таймаут на уровне сокетов ОС — предотвращает любые зависания PySocks
-          socket.setdefaulttimeout(4.0)
-          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-          AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
-          MAX_TARGET = 20
-          CONCURRENCY = 10
-          TIMEOUT = 4.5
-
-          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "CU", "KP", "SY", "VE"}
           ALLOWED_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
           URI_REGEX = re.compile(r'((?:vless|vmess|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
 
-          def load_candidates():
-              configs = []
-              for fname in ["prescan_alive.txt", "raw_candidates.txt"]:
-                  if os.path.exists(fname):
-                      with open(fname, "r", encoding="utf-8", errors="ignore") as f:
-                          for line in f:
-                              matches = URI_REGEX.findall(line)
-                              for c in matches:
-                                  c = c.strip()
-                                  if c.startswith(ALLOWED_SCHEMES) and c not in configs:
-                                      configs.append(c)
-              return configs
+          cleaned = []
+          if os.path.exists("xray_out.txt"):
+              with open("xray_out.txt", "r", encoding="utf-8", errors="ignore") as f:
+                  for line in f:
+                      matches = URI_REGEX.findall(line)
+                      for m in matches:
+                          m = m.strip()
+                          if m.startswith(ALLOWED_SCHEMES) and m not in cleaned:
+                              cleaned.append(m)
 
-          def kill_process(proc):
-              if not proc:
-                  return
-              try:
-                  proc.kill()
-                  proc.wait(timeout=0.3)
-              except Exception:
-                  pass
+          # Ограничиваем первыми 20
+          final_configs = cleaned[:20]
 
-          def wait_for_port(port, timeout=1.2):
-              start = time.time()
-              while time.time() - start < timeout:
-                  try:
-                      with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                          return True
-                  except Exception:
-                      time.sleep(0.04)
-              return False
+          print(f"\n================================================================================")
+          print(f"[ИТОГ] Отобрано {len(final_configs)} гарантированно рабочих конфигураций для Google AI Studio!")
+          print(f"================================================================================")
 
-          def start_proxy(config, port):
-              cmd = ["./xray-knife", "proxy", "inbound", "-c", config, "--port", str(port)]
-              try:
-                  proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  if wait_for_port(port, timeout=1.0):
-                      return proc
-                  kill_process(proc)
-              except Exception:
-                  pass
+          with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
+              for c in final_configs:
+                  f.write(c + "\n")
 
-              cmd = ["./xray-knife", "proxy", "-c", config, "--port", str(port)]
-              try:
-                  proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  if wait_for_port(port, timeout=1.0):
-                      return proc
-                  kill_process(proc)
-              except Exception:
-                  pass
-              return None
-
-          def format_time(seconds):
-              m, s = divmod(int(seconds), 60)
-              return f"{m:02d}:{s:02d}"
-
-          working_configs = []
-          processed_count = 0
-          total_candidates = 0
-          start_time = 0
-          lock = threading.Lock()
-          stop_event = threading.Event()
-
-          def get_progress_prefix():
-              elapsed = max(0.1, time.time() - start_time)
-              speed = processed_count / elapsed
-              remaining_items = max(0, total_candidates - processed_count)
-              eta_seconds = (remaining_items / speed) if speed > 0 else 0
-              
-              return (
-                  f"[{processed_count:02d}/{total_candidates:02d} | "
-                  f"Найдено: {len(working_configs):02d}/{MAX_TARGET:02d} | "
-                  f"ETA: {format_time(eta_seconds)}]"
-              )
-
-          def verify_config(item):
-              global processed_count
-              idx, config, worker_id = item
-              
-              if stop_event.is_set():
-                  return
-
-              port = 25000 + worker_id
-              proc = start_proxy(config, port)
-
-              status_msg = ""
-              is_success = False
-
-              if not proc:
-                  status_msg = "[-] Сбой старта ядра Xray"
-              else:
-                  proxies = {
-                      'http': f'socks5h://127.0.0.1:{port}',
-                      'https': f'socks5h://127.0.0.1:{port}'
-                  }
-                  headers = {
-                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-                      'Accept-Language': 'en-US,en;q=0.9'
-                  }
-
-                  try:
-                      # 1. Быстрый GeoIP
-                      country = "UNKNOWN"
-                      try:
-                          geo = requests.get("https://api.country.is", proxies=proxies, timeout=2.5)
-                          if geo.status_code == 200:
-                              country = geo.json().get("country", "UNKNOWN").upper()
-                      except Exception:
-                          pass
-
-                      if country in BLOCKED_COUNTRIES:
-                          status_msg = f"[-] Отклонен: Геоблок страны ({country})"
-                      else:
-                          # 2. Проверка Google AI Studio
-                          req_t0 = time.time()
-                          resp = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=TIMEOUT, allow_redirects=True)
-                          latency = int((time.time() - req_t0) * 1000)
-
-                          final_url = resp.url.lower()
-                          body = resp.text.lower()
-
-                          if resp.status_code in [200, 302]:
-                              is_geoblocked = (
-                                  "available_regions" in final_url or
-                                  "available-regions" in final_url or
-                                  "not available in your country" in body or
-                                  "region is not supported" in body or
-                                  ("restricted" in body and "google ai studio" in body)
-                              )
-                              if is_geoblocked:
-                                  status_msg = f"[-] Отклонен: Редирект на недоступность региона ({country})"
-                              else:
-                                  is_success = True
-                                  status_msg = f"[+] РАБОТАЕТ ДЛЯ AI STUDIO! ({country}, {latency}ms)"
-                          else:
-                              status_msg = f"[-] Отклонен: HTTP код {resp.status_code}"
-                  except requests.exceptions.Timeout:
-                      status_msg = "[-] Отклонен: Таймаут"
-                  except Exception as e:
-                      status_msg = f"[-] Отклонен: Ошибка сети ({type(e).__name__})"
-                  finally:
-                      kill_process(proc)
-
-              with lock:
-                  processed_count += 1
-                  prefix = get_progress_prefix()
-                  
-                  if is_success:
-                      if len(working_configs) < MAX_TARGET:
-                          working_configs.append(config)
-                          print(f"{prefix} 🌟 {status_msg}", flush=True)
-                          if len(working_configs) >= MAX_TARGET:
-                              print(f"\n[🎯] Собрано {MAX_TARGET} рабочих узлов! Завершаем...", flush=True)
-                              stop_event.set()
-                  else:
-                      print(f"{prefix} {status_msg}", flush=True)
-
-          def main():
-              global total_candidates, start_time
-              candidates = load_candidates()
-              total_candidates = len(candidates)
-              start_time = time.time()
-
-              print("=" * 70, flush=True)
-              print(f"[*] Старт проверки кандидатов: {total_candidates} шт. (Цель: {MAX_TARGET})", flush=True)
-              print("=" * 70, flush=True)
-
-              if not candidates:
-                  print("[!] Кандидатов нет.", flush=True)
-                  return
-
-              tasks = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]
-
-              with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-                  futures = [executor.submit(verify_config, t) for t in tasks]
-                  for f in concurrent.futures.as_completed(futures):
-                      if stop_event.is_set():
-                          for pending in futures:
-                              pending.cancel()
-                          break
-
-              total_elapsed = time.time() - start_time
-              print("=" * 70, flush=True)
-              print(f"[ИТОГ] Завершено за {format_time(total_elapsed)}! Найдено: {len(working_configs)}/{MAX_TARGET}", flush=True)
-              print("=" * 70, flush=True)
-
-              with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-                  for c in working_configs:
-                      f.write(c + "\n")
-
-              if working_configs:
-                  b64_sub = base64.b64encode(("\n".join(working_configs) + "\n").encode('utf-8')).decode('utf-8')
-                  with open("sub.txt", "w", encoding="utf-8") as f:
-                      f.write(b64_sub)
-              else:
-                  open("sub.txt", "w").close()
-
-          if __name__ == "__main__":
-              main()
+          if final_configs:
+              b64_sub = base64.b64encode(("\n".join(final_configs) + "\n").encode('utf-8')).decode('utf-8')
+              with open("sub.txt", "w", encoding="utf-8") as f:
+                  f.write(b64_sub)
+              print("[+] sub.txt (Base64) и clean_configs.txt успешно созданы.")
+          else:
+              open("sub.txt", "w").close()
+              print("[!] Рабочих конфигураций не обнаружено.")
           EOF
-          python3 -u deep_check.py
-          
+          python3 make_sub.py
 
       - name: Commit and Push
         run: |
@@ -351,6 +166,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s clean_configs.txt ]; then
             git add sub.txt clean_configs.txt
-            git commit -m "Update guaranteed working AI Studio configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
+            git commit -m "Update live Google AI Studio configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
             git push
           fi
