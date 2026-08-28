@@ -21,19 +21,18 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: pip install requests urllib3
+        # ВЕРНУЛИ pysocks - без него тесты прокси падали с критической ошибкой!
+        run: pip install requests pysocks urllib3
 
-      - name: Install Xray-Core (Direct Link - No API Limits)
+      - name: Install Xray-Core
         run: |
-          echo "[*] Скачивание последней версии Xray-core..."
+          echo "[*] Установка Xray-core..."
           wget -qO xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
           unzip -o xray.zip -d xray_bin
           mv xray_bin/xray ./xray
           chmod +x xray
-          echo "[+] Xray установлен успешно! Версия:"
-          ./xray version
 
-      - name: Fetch 10 Top Sources and Filter
+      - name: Fetch and Filter Russian-Optimized Nodes
         env:
           PYTHONUNBUFFERED: "1"
         run: |
@@ -45,20 +44,18 @@ jobs:
           import sys
           from urllib.parse import urlparse, parse_qs
 
+          # 🔴 САМОЕ ВАЖНОЕ ИЗМЕНЕНИЕ 🔴
+          # Мы берем ТОЛЬКО WHITE-списки (специально для РФ, обходящие ТСПУ).
+          # Никаких BL (Black-листов), которые в России блокируются!
           SOURCES = [
-              "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
-              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
-              "https://raw.githubusercontent.com/VOID-Anonymity/V.O.I.D-VPN_Bypass/refs/heads/main/url_work.txt",
-              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt",
-              "https://raw.githubusercontent.com/w1770946466/Auto_proxy/main/Long_term_subscription_num",
-              "https://raw.githubusercontent.com/Lexiie/all_proxy/main/file/vless.txt",
-              "https://raw.githubusercontent.com/BoringCat/free-node/main/v2ray.txt",
-              "https://raw.githubusercontent.com/tbbatbb/Proxy/master/main/vless",
-              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt"
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
+              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
+              "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/githubmirror/clean/vless.txt",
+              "https://raw.githubusercontent.com/VOID-Anonymity/V.O.I.D-VPN_Bypass/main/url_work.txt",
+              "https://raw.githubusercontent.com/BoringCat/free-node/main/v2ray.txt"
           ]
 
-          # Мусорные SNI
+          # Исключаем SNI, за которые банит ТСПУ
           BAD_SNIS = {"google.com", "speedtest.net", "cloudflare.com", "workers.dev"}
 
           def decode_if_base64(text):
@@ -73,7 +70,7 @@ jobs:
           collected = set()
 
           print("=" * 70, flush=True)
-          print("[*] СТАРТ СБОРА И ФИЛЬТРАЦИИ БАЗ", flush=True)
+          print("[*] СТАРТ СБОРА БАЗ (ТОЛЬКО WHITE-СПИСКИ ДЛЯ РФ)", flush=True)
           print("=" * 70, flush=True)
 
           for url in SOURCES:
@@ -85,7 +82,6 @@ jobs:
                       
                       found_in_source = 0
                       for m in matches:
-                          # ОТРЕЗАЕМ ХЭШТЕГИ ПЕРЕД ПАРСИНГОМ
                           clean_link = m.split("#")[0].strip()
                           
                           if "security=reality" not in clean_link.lower():
@@ -110,25 +106,24 @@ jobs:
                               found_in_source += 1
                           except Exception:
                               pass
-                      print(f"[+] {url.split('/')[-1]}: найдено {found_in_source} валидных", flush=True)
+                      print(f"[+] Из {url.split('/')[-1]} загружено: {found_in_source} узлов", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка {url.split('/')[-1]}: {e}", flush=True)
 
           unique_list = list(collected)
-          print(f"\n[*] Всего уникальных чистых кандидатов: {len(unique_list)}", flush=True)
+          print(f"\n[*] Всего уникальных кандидатов, оптимизированных для РФ: {len(unique_list)}", flush=True)
 
           if not unique_list:
-              print("[!] КРИТИЧЕСКАЯ ОШИБКА: Не найдено ни одного узла! Завершаем...", flush=True)
+              print("[!] ОШИБКА: Не найдено ни одного узла. Завершаем...", flush=True)
               sys.exit(0)
 
-          # Рандомизация для разнообразия
+          # Перемешиваем для гарантии разнообразия
           random.shuffle(unique_list)
 
-          # Берем 800 штук для тестов
           with open("candidates.txt", "w", encoding="utf-8") as f:
-              for c in unique_list[:800]:
+              for c in unique_list[:500]:
                   f.write(c + "\n")
-          print("[+] Файл candidates.txt успешно создан.", flush=True)
+          print("[+] Файл candidates.txt готов.", flush=True)
           EOF
           python3 get_candidates.py
 
@@ -137,7 +132,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           if [ ! -f candidates.txt ] || [ ! -s candidates.txt ]; then
-            echo "[!] Файл candidates.txt пуст или отсутствует. Пропускаем валидацию."
+            echo "[!] Пропускаем валидацию - нет кандидатов."
             exit 0
           fi
 
@@ -207,30 +202,30 @@ jobs:
               proc = None
               try:
                   proc = subprocess.Popen(["./xray", "run", "-c", cfg_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  time.sleep(0.7) # Даем ядру запуститься
+                  time.sleep(0.7) 
                   
                   proxies = {"http": f"socks5h://127.0.0.1:{port}", "https": f"socks5h://127.0.0.1:{port}"}
                   headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36"}
 
-                  # 1. ТЕСТ TELEGRAM
-                  if requests.get("https://api.telegram.org", proxies=proxies, timeout=3.5).status_code not in [200, 302, 404]:
+                  # 1. ТЕСТ TELEGRAM (Строгий тест на полезную нагрузку)
+                  tg_req = requests.get("https://api.telegram.org", proxies=proxies, timeout=3.5)
+                  if tg_req.status_code not in [200, 302, 404]:
                       return
 
-                  # 2. ТЕСТ AI STUDIO
+                  # 2. ТЕСТ AI STUDIO (Пробиваем геоблок)
                   t0 = time.time()
                   ai = requests.get("https://aistudio.google.com/prompts/new_chat", proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
                   latency = int((time.time() - t0) * 1000)
 
-                  # Исключаем геоблок
                   if "available_regions" not in ai.url.lower() and "not available in your country" not in ai.text.lower():
                       with lock:
                           if len(working) < TARGET_GOAL:
                               working.append(link)
                               name = link.split("#")[-1] if "#" in link else urlparse(link.split("#")[0]).hostname
-                              print(f"[🔥] [{len(working):02d}/{TARGET_GOAL:02d}] РАБОТАЕТ! TG + Google | Пинг: {latency}ms | Узел: {name}", flush=True)
+                              print(f"[🔥] [{len(working):02d}/{TARGET_GOAL:02d}] РАБОТАЕТ! TG + AI Studio | Пинг: {latency}ms | Узел: {name}", flush=True)
                               if len(working) >= TARGET_GOAL:
                                   stop_event.set()
-              except Exception:
+              except Exception as e:
                   pass
               finally:
                   if proc:
@@ -252,5 +247,8 @@ jobs:
               for _ in executor.map(worker, [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]):
                   if stop_event.is_set(): break
 
-          print(f"\n[+] Сохранено проверенных конфигураций: {len(working)}", flush=True)
-          with open("clean
+          print(f"\n[+] Тест завершен. Сохранено рабочих узлов: {len(working)}", flush=True)
+          with open("clean_configs.txt", "w") as f:
+              for c in working: f.write(c + "\n")
+
+          if working
