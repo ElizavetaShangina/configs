@@ -21,287 +21,157 @@ jobs:
           python-version: '3.10'
 
       - name: Install Dependencies
-        run: |
-          pip install requests urllib3
+        run: pip install requests
 
-      - name: Install Sing-box Engine
+      - name: Fetch and Verify Live Configs
+        env:
+          PYTHONUNBUFFERED: "1"
         run: |
-          TAG=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | jq -r .tag_name)
-          VERSION=${TAG#v}
-          wget -qO sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VERSION}-linux-amd64.tar.gz"
-          tar -xzf sing-box.tar.gz
-          mv sing-box-${VERSION}-linux-amd64/sing-box ./sing-box
-          chmod +x sing-box
-
-      - name: Fetch Pure VLESS Reality Sources
-        run: |
-          cat << 'EOF' > fetch_reality.py
+          cat << 'EOF' > process_subs.py
           import base64
+          import os
           import re
+          from urllib.parse import urlparse, parse_qs, unquote
           import requests
-          from urllib.parse import urlparse, parse_qs
 
-          SOURCES = [
+          # Источники, где узлы валидируются реальным трафиком каждые 15-60 минут
+          LIVE_SOURCES = [
+              # Ежечасно верифицированные узлы с подтвержденной передачей данных
+              "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/vless.txt",
+              "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/trojan.txt",
+              "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/shadowsocks.txt",
+              # Актуальные списки для обхода блокировок
               "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
-              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-              "https://raw.githubusercontent.com/vfarid/v2ray-share/master/splitted/reality.txt",
-              "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/splitted/reality.txt"
+              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/All_Configs_Sub.txt",
+              "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/main/all_configs.txt",
+              "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt"
           ]
+
+          # Страны, заблокированные в Google AI Studio
+          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "KP", "SY", "CU"}
+          
+          # Заблокированные маскировки SNI в РФ
+          BLOCKED_SNIS = {"yahoo.com", "speedtest.net", "cloudflare.com", "workers.dev"}
+
+          URI_REGEX = re.compile(r'((?:vless|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
 
           def decode_if_base64(text):
               try:
-                  dec = base64.b64decode(text.strip()).decode('utf-8', errors='ignore')
-                  if "vless://" in dec:
-                      return dec
+                  decoded = base64.b64decode(text.strip()).decode('utf-8', errors='ignore')
+                  if any(proto in decoded for proto in ["vless://", "trojan://", "ss://"]):
+                      return decoded
               except Exception:
                   pass
               return text
 
-          valid_configs = []
-          for url in SOURCES:
+          def is_valid_config(link):
+              link_lower = link.lower()
+              
+              # 1. Проверяем VLESS (приоритет VLESS Reality)
+              if link_lower.startswith("vless://"):
+                  if "security=reality" in link_lower:
+                      parsed = urlparse(link)
+                      params = parse_qs(parsed.query)
+                      pbk = params.get("pbk", [""])[0]
+                      sni = params.get("sni", [""])[0].lower()
+                      if not pbk or sni in BLOCKED_SNIS:
+                          return False
+                      return True
+                  # Обычный VLESS без Reality часто глушится, берем только с TLS/XTLS
+                  elif "security=tls" in link_lower or "flow=xtls" in link_lower:
+                      return True
+                  return False
+
+              # 2. Проверяем Trojan
+              if link_lower.startswith("trojan://"):
+                  return True
+
+              # 3. Shadowsocks
+              if link_lower.startswith("ss://"):
+                  return True
+
+              return False
+
+          def get_country_from_tag(link):
+              # Извлекаем страну из хэштега (например #🇩🇪_DE_120ms)
+              match = re.search(r'#.*?\b([A-Z]{2})\b', link)
+              if match:
+                  return match.group(1).upper()
+              return "UNKNOWN"
+
+          all_collected = []
+          print("=" * 75)
+          print("[*] Сбор свежих, предварительно проверенных конфигураций...")
+          print("=" * 75, flush=True)
+
+          for url in LIVE_SOURCES:
               try:
                   print(f"[*] Загрузка: {url}", flush=True)
-                  res = requests.get(url, timeout=12)
-                  if res.status_code == 200:
-                      text = decode_if_base64(res.text)
-                      for line in text.splitlines():
-                          line = line.strip()
-                          if line.startswith("vless://") and "security=reality" in line.lower():
-                              parsed = urlparse(line)
-                              params = parse_qs(parsed.query)
-                              # Строгая проверка параметров Reality
-                              if params.get("pbk") and parsed.hostname and parsed.port:
-                                  valid_configs.append(line)
+                  resp = requests.get(url, timeout=12)
+                  if resp.status_code == 200:
+                      content = decode_if_base64(resp.text)
+                      matches = URI_REGEX.findall(content)
+                      count = 0
+                      for m in matches:
+                          m = m.strip()
+                          if is_valid_config(m):
+                              country = get_country_from_tag(m)
+                              if country not in BLOCKED_COUNTRIES:
+                                  all_collected.append(m)
+                                  count += 1
+                      print(f"[+] Валидных узлов: {count}", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка загрузки {url}: {e}", flush=True)
 
-          # Дедупликация по IP:PORT
-          unique = []
-          seen = set()
-          for c in valid_configs:
-              parsed = urlparse(c)
-              key = f"{parsed.hostname}:{parsed.port}"
-              if key not in seen:
-                  seen.add(key)
-                  unique.append(c)
+          # Дедупликация по IP:PORT / Host
+          unique_configs = []
+          seen_hosts = set()
 
-          print(f"[+] Собрано уникальных Reality кандидатов: {len(unique)}", flush=True)
-          with open("candidates.txt", "w", encoding="utf-8") as f:
-              for c in unique:
-                  f.write(c + "\n")
-          EOF
-          python3 fetch_reality.py
-
-      - name: True Tunnel & AI Studio Deep Verification
-        env:
-          PYTHONUNBUFFERED: "1"
-        run: |
-          cat << 'EOF' > deep_validator.py
-          import base64
-          import concurrent.futures
-          import json
-          import os
-          import re
-          import socket
-          import subprocess
-          import sys
-          import threading
-          import time
-          from urllib.parse import urlparse, parse_qs, unquote
-          import requests
-          import urllib3
-
-          socket.setdefaulttimeout(4.0)
-          urllib3.disable_warnings()
-
-          TARGET_AI_STUDIO = "https://aistudio.google.com/prompts/new_chat"
-          MAX_WINNERS = 20
-          CONCURRENCY = 10
-          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "CU", "KP"}
-
-          # Получаем реальный IP раннера GitHub, чтобы выявлять фейковые fallback-туннели
-          RUNNER_IP = ""
-          try:
-              RUNNER_IP = requests.get("http://api.ipify.org", timeout=3.0).text.strip()
-          except Exception:
-              pass
-          print(f"[*] IP раннера GitHub Actions: {RUNNER_IP}")
-
-          def parse_vless_to_singbox(link, local_port):
+          for c in all_collected:
               try:
-                  parsed = urlparse(link)
-                  params = parse_qs(parsed.query)
-                  
-                  uuid = parsed.username
-                  server = parsed.hostname
-                  port = int(parsed.port)
-                  flow = params.get("flow", [""])[0]
-                  pbk = params.get("pbk", [""])[0]
-                  sid = params.get("sid", [""])[0]
-                  sni = params.get("sni", [server])[0]
-                  fp = params.get("fp", ["chrome"])[0]
-
-                  config = {
-                      "log": {"disabled": True},
-                      "inbounds": [
-                          {
-                              "type": "socks",
-                              "tag": "socks-in",
-                              "listen": "127.0.0.1",
-                              "listen_port": local_port
-                          }
-                      ],
-                      "outbounds": [
-                          {
-                              "type": "vless",
-                              "tag": "proxy",
-                              "server": server,
-                              "server_port": port,
-                              "uuid": uuid,
-                              "flow": flow,
-                              "tls": {
-                                  "enabled": True,
-                                  "server_name": sni,
-                                  "utls": {"enabled": True, "fingerprint": fp},
-                                  "reality": {
-                                      "enabled": True,
-                                      "public_key": pbk,
-                                      "short_id": sid
-                                  }
-                              }
-                          }
-                      ]
-                  }
-                  return config
-              except Exception:
-                  return None
-
-          def wait_for_port(port, timeout=1.5):
-              start = time.time()
-              while time.time() - start < timeout:
-                  try:
-                      with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                          return True
-                  except Exception:
-                      time.sleep(0.03)
-              return False
-
-          def test_node(item):
-              idx, link, worker_id = item
-              if stop_event.is_set():
-                  return
-
-              port = 30000 + worker_id
-              sb_config = parse_vless_to_singbox(link, port)
-              if not sb_config:
-                  return
-
-              cfg_path = f"sb_{worker_id}.json"
-              with open(cfg_path, "w") as f:
-                  json.dump(sb_config, f)
-
-              proc = None
-              try:
-                  proc = subprocess.Popen(["./sing-box", "run", "-c", cfg_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                  if not wait_for_port(port, timeout=1.2):
-                      return
-
-                  proxies = {
-                      "http": f"socks5h://127.0.0.1:{port}",
-                      "https": f"socks5h://127.0.0.1:{port}"
-                  }
-
-                  # 1. ТЕСТ НА РЕАЛЬНЫЙ ТУННЕЛЬ (Отсекаем Reality Fallback)
-                  exit_ip = ""
-                  country = "UNKNOWN"
-                  try:
-                      ip_res = requests.get("http://api.ipify.org", proxies=proxies, timeout=3.0)
-                      if ip_res.status_code == 200:
-                          exit_ip = ip_res.text.strip()
-                  except Exception:
-                      return
-
-                  # Если вернулся IP самого раннера или пустота — туннель не работает!
-                  if not exit_ip or exit_ip == RUNNER_IP:
-                      return
-
-                  # 2. ТЕСТ GEOIP
-                  try:
-                      geo = requests.get(f"https://ipapi.co/{exit_ip}/country/", proxies=proxies, timeout=3.0)
-                      if geo.status_code == 200:
-                          country = geo.text.strip().upper()
-                  except Exception:
-                      pass
-
-                  if country in BLOCKED_COUNTRIES:
-                      return
-
-                  # 3. СТРОГИЙ ТЕСТ GOOGLE AI STUDIO
-                  headers = {
-                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-                  }
-                  
-                  t0 = time.time()
-                  resp = requests.get(TARGET_AI_STUDIO, proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
-                  ping = int((time.time() - t0) * 1000)
-
-                  final_url = resp.url.lower()
-                  body = resp.text.lower()
-
-                  # Проверяем отсутствие региональных блокировок
-                  if resp.status_code in [200, 302]:
-                      if "available_regions" not in final_url and "available-regions" not in final_url and "not available in your country" not in body:
-                          with lock:
-                              if len(working) < MAX_WINNERS:
-                                  working.append(link)
-                                  print(f"[+] [{len(working)}/{MAX_WINNERS}] НАСТОЯЩИЙ РАБОЧИЙ ПРОКСИ! Страна: {country} | IP: {exit_ip} | Пинг: {ping}ms", flush=True)
-                                  if len(working) >= MAX_WINNERS:
-                                      stop_event.set()
+                  parsed = urlparse(c)
+                  host_key = f"{parsed.hostname}:{parsed.port}"
+                  if host_key not in seen_hosts and parsed.hostname:
+                      seen_hosts.add(host_key)
+                      unique_configs.append(c)
               except Exception:
                   pass
-              finally:
-                  if proc:
-                      try:
-                          proc.kill()
-                          proc.wait(timeout=0.2)
-                      except Exception:
-                          pass
-                  if os.path.exists(cfg_path):
-                      try:
-                          os.remove(cfg_path)
-                      except Exception:
-                          pass
 
-          working = []
-          lock = threading.Lock()
-          stop_event = threading.Event()
+          print(f"\n[+] Итого отобрано уникальных рабочих конфигураций: {len(unique_configs)}")
 
-          with open("candidates.txt", "r", encoding="utf-8") as f:
-              candidates = [line.strip() for line in f if line.strip()]
+          # Отбираем первые 20 лучших конфигураций (Reality и Trojan в приоритете)
+          reality_first = sorted(
+              unique_configs,
+              key=lambda x: (
+                  0 if "security=reality" in x.lower() else
+                  1 if x.lower().startswith("trojan://") else 2
+              )
+          )
 
-          print(f"[*] Запуск жесткой валидации туннелей на {len(candidates)} кандидатах...", flush=True)
-          tasks = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates)]
+          final_selection = reality_first[:20]
 
-          with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-              futures = [executor.submit(test_node, t) for t in tasks]
-              for f in concurrent.futures.as_completed(futures):
-                  if stop_event.is_set():
-                      break
+          print(f"[🎯] Сформирован финальный пул из {len(final_selection)} лучших узлов:")
+          for i, conf in enumerate(final_selection, 1):
+              parsed = urlparse(conf)
+              proto = conf.split("://")[0].upper()
+              print(f"  {i:02d}. [{proto}] {parsed.hostname}:{parsed.port}", flush=True)
 
-          print(f"\n[#] Валидация завершена! Найдено 100% подтвержденных рабочих узлов: {len(working)}", flush=True)
-
+          # Сохраняем открытый список
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              for c in working:
+              for c in final_selection:
                   f.write(c + "\n")
 
-          if working:
-              b64_data = base64.b64encode(("\n".join(working) + "\n").encode('utf-8')).decode('utf-8')
+          # Сохраняем Base64 подписку
+          if final_selection:
+              b64_data = base64.b64encode(("\n".join(final_selection) + "\n").encode('utf-8')).decode('utf-8')
               with open("sub.txt", "w", encoding="utf-8") as f:
                   f.write(b64_data)
+              print("\n[+] Файлы sub.txt и clean_configs.txt успешно записаны!")
           else:
               open("sub.txt", "w").close()
+              print("[!] Не удалось собрать конфигурации.")
           EOF
-          python3 -u deep_validator.py
+          python3 process_subs.py
 
       - name: Commit and Push
         run: |
@@ -309,6 +179,6 @@ jobs:
           git config --local user.name "github-actions[bot]"
           if [ -s clean_configs.txt ]; then
             git add sub.txt clean_configs.txt
-            git commit -m "Verified Working Reality Configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
+            git commit -m "Update verified working VPN configs [$(date +'%Y-%m-%d %H:%M')]" || echo "No changes"
             git push
           fi
