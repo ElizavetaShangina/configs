@@ -66,13 +66,9 @@ jobs:
           SOURCES = [
               "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
               "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub6.txt",
-              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
-              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs_base64.txt",
-              "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/vless.txt",
-              "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality"
+              "https://raw.githack.com/igareck/vpn-configs-for-russia/main/BLACK_SS%2BAll_RUS.txt",
+              "https://raw.githack.com/igareck/vpn-configs-for-russia/main/TOR-BRIDGES/TOR_BRIDGES_ALL.txt",
+              "https://raw.githack.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt"
           ]
 
           BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "KP", "CU", "SY"}
