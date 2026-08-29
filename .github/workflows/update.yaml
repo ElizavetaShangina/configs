@@ -25,20 +25,20 @@ jobs:
       - name: Install Python Dependencies
         run: pip install requests pysocks urllib3
 
-      - name: Install Official Xray-Core
+      - name: Install Official Xray-Core Engine
         run: |
-          echo "[*] Установка Xray-core..."
+          echo "[*] Загрузка официального ядра Xray-core..."
           wget -qO xray.zip "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
           unzip -o xray.zip -d xray_bin
           mv xray_bin/xray ./xray
           chmod +x xray
           ./xray version
 
-      - name: Fetch, MTProto-Validate & Build Subscriptions
+      - name: Execute Strict 5-Stage Verification Engine
         env:
           PYTHONUNBUFFERED: "1"
         run: |
-          cat << 'EOF' > run_validator.py
+          cat << 'EOF' > strict_validator.py
           import base64
           import concurrent.futures
           import datetime
@@ -60,35 +60,36 @@ jobs:
           urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
           AI_STUDIO_URL = "https://aistudio.google.com/prompts/new_chat"
-          CONCURRENCY = 4
+          CONCURRENCY = 4 # Оптимально для 2 vCPU runner
 
-          # Базы от igareck и barry-far + топ-проверенные
+          # Проверенные источники (igareck, barry-far, 0xRadikal, yebekhe, Au1rxx)
           SOURCES = [
-              # igareck
               "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS.txt",
               "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/BLACK_VLESS_RUS_mobile.txt",
-              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
-              "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/WHITE-CIDR-RU-all.txt",
-              # barry-far
               "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Splitted-By-Protocol/vless.txt",
               "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub1.txt",
               "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub6.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub7.txt",
-              "https://raw.githubusercontent.com/barry-far/V2ray-Configs/main/Sub8.txt",
-              # Top Verified Feeds
               "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/top100.txt",
+              "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/verified/configs_base64.txt",
+              "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/protocols/vless.txt",
               "https://raw.githubusercontent.com/yebekhe/TelegramV2rayCollector/main/sub/normal/reality"
           ]
 
+          BLOCKED_COUNTRIES = {"RU", "BY", "IR", "CN", "KP", "CU", "SY"}
+          BLOCKED_ORGS = [
+              "cloudflare", "fastly", "cloudfront",
+              "irancell", "mci", "asiatech", "telecommunication company of iran",
+              "mcci", "mobile telecommunication", "afranet", "pars online"
+          ]
+          BAD_SNIS = {"google.com", "speedtest.net", "cloudflare.com", "workers.dev", "yahoo.com"}
           PROTO_REGEX = re.compile(r'((?:vless|trojan|ss)://[^\s\'"<>]+)', re.IGNORECASE)
 
-          # IP-адреса официальных дата-центров Telegram (куда подключаются клиенты Telegram Desktop и Mobile)
-          TELEGRAM_DCS = [
-              ("149.154.167.50", 443),  # DC2 (Европа / РФ основной)
-              ("91.108.56.130", 443),   # DC5 (Азия)
-              ("149.154.175.50", 443),  # DC1 (США)
-              ("149.154.167.91", 443)   # DC4 (Европа резервный)
-          ]
+          # Получаем собственный IP раннера для выявления Fallback-обманок
+          RUNNER_IP = ""
+          try:
+              RUNNER_IP = requests.get("http://api.ipify.org", timeout=3.0).text.strip()
+          except Exception:
+              pass
 
           def decode_if_base64(text):
               try:
@@ -99,8 +100,27 @@ jobs:
                   pass
               return text
 
+          def is_clean_candidate(link):
+              try:
+                  clean = link.split("#")[0].strip()
+                  p = urlparse(clean)
+                  if not p.hostname or not p.port:
+                      return False
+                  host = p.hostname.lower()
+                  if host.endswith(".ir") or host.endswith(".cn") or host.endswith(".ru"):
+                      return False
+                  params = parse_qs(p.query)
+                  sni = params.get("sni", [""])[0].lower()
+                  if any(bad in sni for bad in BAD_SNIS):
+                      return False
+                  if "security=reality" in clean.lower() and not params.get("pbk"):
+                      return False
+                  return True
+              except Exception:
+                  return False
+
           print("=" * 80)
-          print("[1/3] СКАЧИВАНИЕ И ПОДГОТОВКА СЕРВЕРОВ...")
+          print(f"[1/3] СБОР КАНДИДАТОВ ИЗ ВСЕХ БАЗ (IP раннера: {RUNNER_IP})...")
           print("=" * 80, flush=True)
 
           collected_nodes = set()
@@ -113,21 +133,22 @@ jobs:
                       count = 0
                       for m in matches:
                           m = m.strip()
-                          clean_base = m.split("#")[0].strip()
-                          if clean_base not in collected_nodes:
-                              collected_nodes.add(m)
-                              count += 1
+                          if is_clean_candidate(m):
+                              clean_base = m.split("#")[0].strip()
+                              if clean_base not in collected_nodes:
+                                  collected_nodes.add(m)
+                                  count += 1
                       source_name = "/".join(url.split("/")[-2:])
-                      print(f"[+] {source_name}: извлечено {count} шт.", flush=True)
+                      print(f"[+] {source_name}: отобрано {count} шт.", flush=True)
               except Exception as e:
                   print(f"[!] Ошибка {url}: {e}", flush=True)
 
           candidates = list(collected_nodes)
           random.shuffle(candidates)
-          print(f"\n[*] Итого уникальных серверов для теста: {len(candidates)}", flush=True)
+          print(f"\n[*] Всего уникальных кандидатов для 5-ступенчатого теста: {len(candidates)}", flush=True)
 
           if not candidates:
-              print("[!] Нет кандидатов.")
+              print("[!] Кандидатов не найдено.")
               sys.exit(0)
 
           def build_xray_config(link, socks_port):
@@ -171,7 +192,10 @@ jobs:
                           stream["realitySettings"] = reality_settings
                       elif "security=tls" in clean.lower():
                           stream["security"] = "tls"
-                          stream["tlsSettings"] = {"serverName": params.get("sni", [host])[0]}
+                          stream["tlsSettings"] = {
+                              "serverName": params.get("sni", [host])[0],
+                              "fingerprint": params.get("fp", ["chrome"])[0]
+                          }
 
                       if net == "grpc":
                           srv = params.get("serviceName", [""])[0]
@@ -214,32 +238,12 @@ jobs:
                       time.sleep(0.04)
               return False
 
-          def test_telegram_native_dc(socks_port):
-              """Тестирует прямое MTProto TCP-соединение с реальными дата-центрами Telegram."""
-              for dc_ip, dc_port in TELEGRAM_DCS:
-                  s = socks.socksocket()
-                  s.set_proxy(socks.SOCKS5, "127.0.0.1", socks_port)
-                  s.settimeout(3.5)
-                  try:
-                      s.connect((dc_ip, dc_port))
-                      s.send(b"\xef")  # Инициализация MTProto
-                      s.close()
-                      return True, dc_ip
-                  except Exception:
-                      pass
-                  finally:
-                      try:
-                          s.close()
-                      except Exception:
-                          pass
-              return False, None
-
           verified_nodes = []
           lock = threading.Lock()
           tested_count = 0
 
           print("\n" + "=" * 80)
-          print("[2/3] СКВОЗНОЙ MTPROTO ТЕСТ TELEGRAM DC + GOOGLE AI STUDIO...")
+          print("[2/3] СТАРТ 5-СТУПЕНЧАТОЙ ВАЛИДАЦИИ (IP LEAK ➔ GEOIP ➔ MTPROTO DC ➔ T.ME ➔ AI STUDIO)...")
           print("=" * 80, flush=True)
 
           def test_worker(item):
@@ -264,11 +268,6 @@ jobs:
                   if not wait_for_port(port, timeout=3.0):
                       return
 
-                  # 1. АППАРАТНЫЙ ТЕСТ TELEGRAM MTPROTO DC (ПРЯМОЙ TCP К ДАТА-ЦЕНТРАМ)
-                  tg_ok, dc_used = test_telegram_native_dc(port)
-                  if not tg_ok:
-                      return
-
                   proxies = {
                       "http": f"socks5h://127.0.0.1:{port}",
                       "https": f"socks5h://127.0.0.1:{port}"
@@ -278,12 +277,63 @@ jobs:
                       "Accept-Language": "en-US,en;q=0.9"
                   }
 
-                  # 2. ТЕСТ WEB TELEGRAM
+                  # 1. ТЕСТ IP LEAK & FALLBACK (Отсекаем фейковые Reality-заглушки)
+                  exit_ip = ""
+                  try:
+                      ip_res = requests.get("http://api.ipify.org", proxies=proxies, timeout=3.5)
+                      if ip_res.status_code == 200:
+                          exit_ip = ip_res.text.strip()
+                  except Exception:
+                      return
+
+                  if not exit_ip or exit_ip == RUNNER_IP:
+                      return # Фейковый туннель или прямой сброс
+
+                  # 2. ТЕСТ GEOIP & ПРОВАЙДЕРА
+                  try:
+                      geo_data = requests.get(f"http://ip-api.com/json/{exit_ip}?fields=status,countryCode,isp,org,as", proxies=proxies, timeout=3.5).json()
+                      if geo_data.get("status") != "success":
+                          return
+                      
+                      country = geo_data.get("countryCode", "").upper()
+                      org = (geo_data.get("org", "") + " " + geo_data.get("isp", "") + " " + geo_data.get("as", "")).lower()
+
+                      if country in BLOCKED_COUNTRIES or any(bad in org for bad in BLOCKED_ORGS):
+                          return
+
+                      clean_provider = geo_data.get("org") or geo_data.get("isp") or country
+                  except Exception:
+                      return
+
+                  # 3. АППАРАТНЫЙ MTPROTO ТЕСТ К ДАТА-ЦЕНТРАМ TELEGRAM (DC2 Европа)
+                  tg_socket_ok = False
+                  for dc_ip in ["149.154.167.50", "91.108.56.130"]:
+                      s = socks.socksocket()
+                      s.set_proxy(socks.SOCKS5, "127.0.0.1", port)
+                      s.settimeout(3.5)
+                      try:
+                          s.connect((dc_ip, 443))
+                          s.send(b"\xef") # MTProto init handshake
+                          tg_socket_ok = True
+                          s.close()
+                          break
+                      except Exception:
+                          pass
+                      finally:
+                          try:
+                              s.close()
+                          except Exception:
+                              pass
+
+                  if not tg_socket_ok:
+                      return
+
+                  # 4. ТЕСТ WEB TELEGRAM
                   tme_res = requests.get("https://t.me", proxies=proxies, timeout=3.5)
                   if tme_res.status_code != 200:
                       return
 
-                  # 3. ТЕСТ GOOGLE AI STUDIO
+                  # 5. СТРОГИЙ ТЕСТ GOOGLE AI STUDIO
                   t0 = time.time()
                   ai_res = requests.get(AI_STUDIO_URL, proxies=proxies, headers=headers, timeout=5.0, allow_redirects=True)
                   latency = int((time.time() - t0) * 1000)
@@ -296,7 +346,7 @@ jobs:
                           is_valid = True
                           p = urlparse(link.split("#")[0])
                           remark = link.split("#")[-1] if "#" in link else f"{p.hostname}:{p.port}"
-                          info_str = f"Telegram DC: {dc_used} [OK] | AI Studio: {latency}ms [OK] | Узел: {remark}"
+                          info_str = f"Страна: {country} ({clean_provider}) | IP: {exit_ip} | AI Studio: {latency}ms | Узел: {remark}"
               except Exception:
                   pass
               finally:
@@ -316,9 +366,9 @@ jobs:
                   tested_count += 1
                   if is_valid:
                       verified_nodes.append(link)
-                      print(f"[🔥] [{len(verified_nodes):02d} РАБОТАЕТ] {info_str}", flush=True)
+                      print(f"[🔥] [{len(verified_nodes):02d} ВЕРИФИЦИРОВАН] {info_str}", flush=True)
 
-          # Берем первые 300 кандидатов для тестирования
+          # Берем срез кандидатов для глубокой проверки
           test_pool = [(i, c, i % CONCURRENCY) for i, c in enumerate(candidates[:300])]
 
           with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
@@ -327,11 +377,13 @@ jobs:
           now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
           print("\n" + "=" * 80)
-          print(f"[3/3] ИТОГИ: Проверено {tested_count}, Найдено реально работающих: {len(verified_nodes)}")
+          print(f"[3/3] ИТОГИ: Проверено кандидатов: {tested_count}")
+          print(f"[*] 100% ВЕРИФИЦИРОВАНО ДЛЯ TELEGRAM И AI STUDIO: {len(verified_nodes)}")
+          print(f"[*] Время обновления: {now_str}")
           print("=" * 80, flush=True)
 
           with open("clean_configs.txt", "w", encoding="utf-8", newline="\n") as f:
-              f.write(f"# Last Updated: {now_str} | Fully Working TG + AI: {len(verified_nodes)}\n")
+              f.write(f"# Last Updated: {now_str} | Verified Working: {len(verified_nodes)}\n")
               for c in verified_nodes:
                   f.write(c + "\n")
 
@@ -342,9 +394,9 @@ jobs:
               print("[+] sub.txt и clean_configs.txt успешно сгенерированы.")
           else:
               open("sub.txt", "w").close()
-              print("[!] В этом цикле узлов с поддержкой MTProto и AI Studio не найдено.")
+              print("[!] В этом цикле узлов с полной поддержкой не найдено.")
           EOF
-          python3 -u run_validator.py
+          python3 -u strict_validator.py
 
       - name: Commit and Push to Repository
         run: |
@@ -352,18 +404,18 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git pull --rebase || true
           git add sub.txt clean_configs.txt
-          git commit -m "Update verified TG MTProto & AI Studio sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
+          git commit -m "Update strictly verified sub [$(date -u +'%Y-%m-%d %H:%M:%S UTC')]" || echo "No changes to commit"
           git push
 
-      - name: Publish Instant-Release (Zero-Cache & Unblocked)
+      - name: Publish Release (Zero-Cache & Works in Russia)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "[*] Обновление GitHub Release..."
+          echo "[*] Обновление релиза..."
           git tag -f latest
           git push origin latest -f || true
           gh release delete latest -y || true
           gh release create latest sub.txt clean_configs.txt \
-            --title "Latest Verified TG MTProto & AI Studio Nodes" \
+            --title "Latest Strictly Verified Telegram & AI Studio Nodes" \
             --notes "Автоматическое обновление: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           echo "[+] Релиз обновлен."
