@@ -1,1 +1,2 @@
-# Last Updated: 2026-09-22 13:18:35 UTC | Verified Working: 0
+# Last Updated: 2026-09-22 18:02:13 UTC | Verified Working: 1
+vless://72f8e59f-7a0d-44f2-a8db-b4c3e1e36716@92.246.138.5:443?encryption=none&type=tcp&security=reality&sni=plugins.jetbrains.com&flow=xtls-rprx-vision&headerType=none&pbk=f9s2GsuG8gQTiPJplAj3hpUUwdVzM92KEmG3ImvURSI&sid=1677b5291cd9319a&allowInsecure=1&fp=firefox#%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20%5B%2ACIDR%5D
