@@ -1,1 +1,2 @@
-# Last Updated: 2026-09-25 11:36:33 UTC | Verified Working: 0
+# Last Updated: 2026-09-25 17:01:08 UTC | Verified Working: 1
+vless://02bd8b5a-170b-4a79-8e68-9cec710272c7@pl1.gursub.com:8444?type=tcp&security=reality&sni=pl1.gursub.com&pbk=sQ9CcspZ6urWlzGNjjmtfp8EuuDll5RVtcsVoq_EfUE&sid=a3f509aa7a4b41cc&encryption=none&flow=xtls-rprx-vision&fp=qq#%F0%9F%87%B8%F0%9F%87%AA%20Sweden%2C%20Stockholm%20%7C%20%5BBL%5D
