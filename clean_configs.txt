@@ -1,2 +1,6 @@
-# Last Updated: 2026-11-15 13:50:12 UTC | Verified Working: 1
-vless://80a06811-f74b-4b82-ac99-7e66c2a98e1c@91.198.220.117:443?security=tls&sni=linen.gerqix.online&alpn=h2&fp=firefox&type=grpc&serviceName=glush.de1.v1&mode=gun#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%F0%9F%8C%90%20%5B%2ACIDR%5D
+# Last Updated: 2026-11-15 19:43:03 UTC | Verified Working: 5
+vless://3692de53-42e6-4aed-a522-40ec355dcd2f@104.17.70.206:8443?alpn=http%2F1.1&encryption=none&host=free.sahanwickramasinghe.com&path=%2F&security=tls&sni=free.sahanwickramasinghe.com&type=ws&fp=ios&allowInsecure=0&insecure=0#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%F0%9F%8C%90%20%7C%20%5BBL%5D
+vless://a31b6d17-1c4a-44e3-9402-ce78f1fb7eb5@46.243.232.61:8888?security=tls&sni=g-fr1.absolute.beer&alpn=h2&type=grpc&serviceName=lx.sync.v1.Relay&fp=chrome#%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20%5B%2ACIDR%5D%20CDN
+vless://31f11af0-9a05-41a9-b4d0-f4e66e38c00c@155.94.251.229:443?flow=xtls-rprx-vision&security=reality&sni=www.amazon.com&fp=firefox&pbk=TATAkA0QCSMDUaFnfE9HAFJZIJLQs5uCnTzwPa5kYEw&sid=231e5ed6#%F0%9F%87%BA%F0%9F%87%B8%20United%20States%2C%20Dallas%20%7C%20%5BBL%5D
+vless://4b50270b-5caf-4c34-b3da-17b4525604a6@201.34.133.20:443?alpn=h2%2Chttp%2F1.1&encryption=none&security=tls&serviceName=glush.de3.v1&sni=luminexorizon.ink&type=grpc&fp=firefox#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%F0%9F%8C%90%20%7C%20%5B%2ACIDR%5D
+vless://31f11af0-9a05-41a9-b4d0-f4e66e38c00c@155.94.251.229:443?encryption=none&type=tcp&security=reality&flow=xtls-rprx-vision&sni=www.amazon.com&fp=chrome&pbk=TATAkA0QCSMDUaFnfE9HAFJZIJLQs5uCnTzwPa5kYEw&sid=231e5ed6#%F0%9F%87%BA%F0%9F%87%B8%20United%20States%2C%20Dallas%20%7C%20%5BBL%5D
